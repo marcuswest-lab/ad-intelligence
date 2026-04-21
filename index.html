@@ -134,6 +134,18 @@ tr:hover td { background: var(--bg-card-hover); }
 .ad-preview { background: #1e2132; border-radius: 8px; padding: 16px; margin-top: 8px; font-size: 13px; line-height: 1.6; max-height: 300px; overflow-y: auto; white-space: pre-wrap; }
 .ad-preview img { max-width: 200px; border-radius: 6px; margin-top: 8px; }
 
+/* Progress Tracker */
+.progress-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+.progress-job { margin-bottom: 12px; }
+.progress-job-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; font-size: 13px; }
+.progress-bar-wrap { height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; }
+.progress-bar-fill { height: 100%; background: linear-gradient(90deg, var(--accent), var(--info)); transition: width 0.6s ease; border-radius: 4px; }
+.progress-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; vertical-align: middle; }
+.progress-dot.running { background: var(--warning); box-shadow: 0 0 0 0 rgba(245,158,11,0.7); animation: pulse 1.5s infinite; }
+@keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(245,158,11,0.7); } 70% { box-shadow: 0 0 0 8px rgba(245,158,11,0); } 100% { box-shadow: 0 0 0 0 rgba(245,158,11,0); } }
+.progress-recent { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+.progress-job-done { padding: 4px 0; font-size: 13px; }
+
 /* Sheet Tabs */
 .sheet-tabs { display: flex; gap: 0; margin: -20px -20px 16px -20px; border-bottom: 2px solid var(--border); overflow-x: auto; }
 .sheet-tab { padding: 12px 20px; font-size: 13px; font-weight: 600; font-family: inherit; background: transparent; border: none; color: var(--text-muted); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -2px; white-space: nowrap; transition: all 0.2s; }
@@ -243,6 +255,9 @@ tr:hover td { background: var(--bg-card-hover); }
       <div class="feed" id="activityFeed"></div>
     </div>
   </div>
+
+  <!-- Progress Tracker (hidden when no jobs) -->
+  <div class="card" id="progressTracker" style="display:none"></div>
 
   <!-- Performance: Billable Calls + Top Performing Ads -->
   <div class="card" id="performanceCard">
@@ -784,6 +799,11 @@ const Performance = {
     const headRow = document.getElementById('perf-head');
     const bodyEl = document.getElementById('perf-body');
 
+    const iterateBtns = (cid) => `
+      <button class="btn btn-sm btn-accent" onclick="Performance.iterate('creative','${cid}',3)" ${cid ? '' : 'disabled'}>New Images</button>
+      <button class="btn btn-sm btn-outline" onclick="Performance.iterate('copy','${cid}',3)" ${cid ? '' : 'disabled'}>New Copy</button>
+      <button class="btn btn-sm btn-outline" onclick="Performance.iterate('video','${cid}',1)" ${cid ? '' : 'disabled'} title="Takes ~15 min">New Video</button>`;
+
     if (fallback) {
       headRow.innerHTML = ['Preview', 'Creative ID', 'Headline', 'Source/Angle', 'Created', 'Iterate'].map(h => `<th>${h}</th>`).join('');
       bodyEl.innerHTML = rows.map(r => `
@@ -793,10 +813,7 @@ const Performance = {
           <td>${Performance.esc((r.headline || '').slice(0, 80))}</td>
           <td>${Performance.esc(r.source)}</td>
           <td style="font-size:11px;color:var(--text-muted)">${Performance.fmtDate(r.last_call)}</td>
-          <td>
-            <button class="btn btn-sm btn-accent" onclick="Performance.iterate('creative','${Performance.esc(r.creative_id)}',3)" ${r.creative_id ? '' : 'disabled'}>New Images</button>
-            <button class="btn btn-sm btn-outline" onclick="Performance.iterate('copy','${Performance.esc(r.creative_id)}',3)" ${r.creative_id ? '' : 'disabled'}>New Copy</button>
-          </td>
+          <td>${iterateBtns(Performance.esc(r.creative_id))}</td>
         </tr>
       `).join('');
     } else {
@@ -809,10 +826,7 @@ const Performance = {
           <td style="color:var(--success);font-weight:600">$${r.revenue.toFixed(2)}</td>
           <td>$${(r.revenue / r.calls).toFixed(2)}</td>
           <td>${Performance.esc(r.source)}</td>
-          <td>
-            <button class="btn btn-sm btn-accent" onclick="Performance.iterate('creative','${Performance.esc(r.creative_id || r.ad_id)}',3)" ${r.creative_id ? '' : 'disabled'}>New Images</button>
-            <button class="btn btn-sm btn-outline" onclick="Performance.iterate('copy','${Performance.esc(r.creative_id || r.ad_id)}',3)" ${r.creative_id ? '' : 'disabled'}>New Copy</button>
-          </td>
+          <td>${iterateBtns(Performance.esc(r.creative_id || r.ad_id))}</td>
         </tr>
       `).join('');
     }
@@ -828,22 +842,165 @@ const Performance = {
     return m ? `https://drive.google.com/thumbnail?id=${m[1]}&sz=w160` : url;
   },
 
-  async iterate(type, creativeId, iterations) {
+  iterate(type, creativeId, iterations) {
     if (!creativeId) { Toast.show('No creative_id to iterate', 'error'); return; }
-    const endpoint = type === 'creative' ? 'ad-iterate-creative' : 'ad-iterate-copy';
-    const label = type === 'creative' ? 'New images' : 'New copy';
-    Toast.show(`${label} kicking off for ${creativeId}…`, 'info');
-    try {
-      const r = await fetch(`${CONFIG.n8nUrl}/webhook/${endpoint}?creative_id=${encodeURIComponent(creativeId)}&iterations=${iterations}`, { method: 'GET' });
-      if (r.ok) {
-        Toast.show(`${label} complete — check Generated Creatives`, 'success');
+    const cfg = {
+      creative: { endpoint: 'ad-iterate-creative', label: 'New images', expectedSec: 60, qs: `&iterations=${iterations}` },
+      copy:     { endpoint: 'ad-iterate-copy',     label: 'New copy',   expectedSec: 35, qs: `&iterations=${iterations}` },
+      video:    { endpoint: 'ad-iterate-video',    label: 'New video',  expectedSec: 900, qs: '&video_format=ugc' }
+    }[type];
+    if (!cfg) return;
+
+    // Register job in progress tracker — don't await fetch (video takes 15 min)
+    ProgressTracker.start({ id: `${type}_${creativeId}_${Date.now()}`, type, creativeId, label: cfg.label, expectedSec: cfg.expectedSec });
+
+    const url = `${CONFIG.n8nUrl}/webhook/${cfg.endpoint}?creative_id=${encodeURIComponent(creativeId)}${cfg.qs}`;
+    fetch(url, { method: 'GET' })
+      .then(r => {
+        if (!r.ok) { Toast.show(`${cfg.label} webhook returned HTTP ${r.status}`, 'error'); }
+        // Do not mark done here — ProgressTracker polls the sheet for actual result rows
         setTimeout(() => App.refresh(), 2000);
-      } else {
-        Toast.show(`${label} failed: HTTP ${r.status}`, 'error');
+      })
+      .catch(e => Toast.show(`${cfg.label} request error: ${e.message}`, 'error'));
+
+    Toast.show(`${cfg.label} kicked off for ${creativeId.slice(-20)}…`, 'info');
+  }
+};
+
+// ============================================================
+// PROGRESS TRACKER — persists across reloads via localStorage
+// ============================================================
+const ProgressTracker = {
+  STORAGE_KEY: 'ai_dashboard_progress_jobs',
+  POLL_INTERVAL: 12000,
+  jobs: [],
+  pollTimer: null,
+
+  load() {
+    try { this.jobs = JSON.parse(localStorage.getItem(this.STORAGE_KEY) || '[]'); }
+    catch (e) { this.jobs = []; }
+    // Drop jobs older than 30 min since anything beyond that has almost certainly timed out
+    const cutoff = Date.now() - 30 * 60 * 1000;
+    this.jobs = this.jobs.filter(j => j.startedAt > cutoff);
+    this.save();
+  },
+  save() { localStorage.setItem(this.STORAGE_KEY, JSON.stringify(this.jobs)); },
+
+  start(job) {
+    job.startedAt = Date.now();
+    job.status = 'running';
+    this.jobs.push(job);
+    this.save();
+    this.render();
+    this.ensurePolling();
+  },
+
+  ensurePolling() {
+    if (this.pollTimer) return;
+    this.pollTimer = setInterval(() => this.tick(), this.POLL_INTERVAL);
+  },
+  stopPolling() {
+    if (this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null; }
+  },
+
+  async tick() {
+    // Refresh the Generated Creatives sheet and see if any job's iteration has produced rows yet
+    const running = this.jobs.filter(j => j.status === 'running');
+    if (running.length === 0) { this.stopPolling(); this.render(); return; }
+    const generated = await DataService.fetchSheet('Generated Creatives');
+    const now = Date.now();
+    let anyUpdate = false;
+    for (const job of running) {
+      const matches = generated.filter(g => {
+        if (!g.iteration_of) return false;
+        if (g.iteration_of !== job.creativeId) return false;
+        // Only count iterations produced AFTER we started this job
+        const created = Date.parse(g.created_at || '');
+        return isNaN(created) || created >= job.startedAt - 5000;
+      });
+      if (matches.length > 0) {
+        // For video: any match is a finish. For creative/copy: expect multiple rows, accept any arrival.
+        job.status = 'done';
+        job.finishedAt = now;
+        job.resultCount = matches.length;
+        anyUpdate = true;
+        Toast.show(`${job.label} done for ${job.creativeId.slice(-20)} (${matches.length} new)`, 'success');
+      } else if (now - job.startedAt > job.expectedSec * 2500) {
+        // 2.5x expected time = consider timed out
+        job.status = 'timeout';
+        job.finishedAt = now;
+        anyUpdate = true;
       }
-    } catch (e) {
-      Toast.show(`${label} request error: ${e.message}`, 'error');
     }
+    if (anyUpdate) {
+      this.save();
+      // Trigger a full refresh so the new creatives show up in the Performance + Generated tabs
+      if (typeof App !== 'undefined' && App.refresh) App.refresh();
+    }
+    this.render();
+  },
+
+  render() {
+    const el = document.getElementById('progressTracker');
+    if (!el) return;
+    const active = this.jobs.filter(j => j.status === 'running');
+    const recent = this.jobs.filter(j => j.status !== 'running').slice(-5);
+
+    if (active.length === 0 && recent.length === 0) {
+      el.style.display = 'none';
+      el.innerHTML = '';
+      return;
+    }
+    el.style.display = 'block';
+    const now = Date.now();
+    const activeHtml = active.map(j => {
+      const elapsed = Math.floor((now - j.startedAt) / 1000);
+      const pct = Math.min(98, (elapsed / j.expectedSec) * 100);
+      const eta = Math.max(0, j.expectedSec - elapsed);
+      return `
+        <div class="progress-job">
+          <div class="progress-job-top">
+            <div><span class="progress-dot running"></span><strong>${j.label}</strong> &nbsp;<span style="color:var(--text-muted);font-family:monospace;font-size:11px">${j.creativeId}</span></div>
+            <div style="color:var(--text-muted);font-size:12px">${ProgressTracker.fmtTime(elapsed)} elapsed · ~${ProgressTracker.fmtTime(eta)} left</div>
+          </div>
+          <div class="progress-bar-wrap"><div class="progress-bar-fill" style="width:${pct.toFixed(1)}%"></div></div>
+        </div>
+      `;
+    }).join('');
+    const recentHtml = recent.map(j => {
+      const dur = j.finishedAt ? Math.floor((j.finishedAt - j.startedAt) / 1000) : 0;
+      const color = j.status === 'done' ? 'var(--success)' : 'var(--warning)';
+      const icon = j.status === 'done' ? '✓' : '⏱';
+      return `<div class="progress-job-done" style="color:${color}">${icon} <strong>${j.label}</strong> ${j.status === 'done' ? `(${j.resultCount} new)` : '(timed out)'} · <span style="color:var(--text-muted);font-family:monospace;font-size:11px">${j.creativeId.slice(-24)}</span> · ${ProgressTracker.fmtTime(dur)}</div>`;
+    }).join('');
+    el.innerHTML = `
+      <div class="progress-header">
+        <strong>Iterations in progress</strong>
+        ${recent.length > 0 ? `<button class="btn btn-sm btn-outline" onclick="ProgressTracker.clearDone()">Clear completed</button>` : ''}
+      </div>
+      ${activeHtml}
+      ${recentHtml ? `<div class="progress-recent">${recentHtml}</div>` : ''}
+    `;
+  },
+
+  clearDone() {
+    this.jobs = this.jobs.filter(j => j.status === 'running');
+    this.save();
+    this.render();
+  },
+
+  fmtTime(sec) {
+    if (sec < 60) return `${sec}s`;
+    const m = Math.floor(sec / 60), s = sec % 60;
+    return `${m}m ${s}s`;
+  },
+
+  init() {
+    this.load();
+    this.render();
+    if (this.jobs.some(j => j.status === 'running')) this.ensurePolling();
+    // Live tick for elapsed-time display even between polls
+    setInterval(() => { if (this.jobs.some(j => j.status === 'running')) this.render(); }, 1000);
   }
 };
 
@@ -1221,6 +1378,7 @@ const App = {
 
   async init() {
     renderWorkflowButtons();
+    ProgressTracker.init();
     await this.refresh();
     Settings.load();
     Settings.renderKeywords();
