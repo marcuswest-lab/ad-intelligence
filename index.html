@@ -244,6 +244,40 @@ tr:hover td { background: var(--bg-card-hover); }
     </div>
   </div>
 
+  <!-- Performance: Billable Calls + Top Performing Ads -->
+  <div class="card" id="performanceCard">
+    <h2><span class="dot" style="background:var(--success)"></span> Performance &amp; Top Performers</h2>
+    <div class="metrics" style="margin-bottom:16px">
+      <div class="metric-card success">
+        <div class="label">Billable Calls</div>
+        <div class="value" id="perf-billable">--</div>
+        <div class="sub" id="perf-billable-sub"></div>
+      </div>
+      <div class="metric-card info">
+        <div class="label">Total Revenue</div>
+        <div class="value" id="perf-revenue">--</div>
+        <div class="sub" id="perf-revenue-sub"></div>
+      </div>
+      <div class="metric-card warning">
+        <div class="label">Avg Payout</div>
+        <div class="value" id="perf-avg">--</div>
+        <div class="sub" id="perf-avg-sub"></div>
+      </div>
+      <div class="metric-card">
+        <div class="label">Attributed Ads</div>
+        <div class="value" id="perf-attributed">--</div>
+        <div class="sub" id="perf-attributed-sub"></div>
+      </div>
+    </div>
+    <div id="perf-note" style="font-size:12px;color:var(--text-muted);margin-bottom:12px"></div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr id="perf-head"></tr></thead>
+        <tbody id="perf-body"></tbody>
+      </table>
+    </div>
+  </div>
+
   <!-- Tabbed Data View -->
   <div class="card">
     <div class="sheet-tabs" id="sheetTabs">
@@ -450,13 +484,14 @@ const DataService = {
   },
 
   async fetchAll() {
-    const [scraped, analysis, generated, settings] = await Promise.all([
+    const [scraped, analysis, generated, settings, calls] = await Promise.all([
       this.fetchSheet('Scraped Ads'),
       this.fetchSheet('Analysis'),
       this.fetchSheet('Generated Creatives'),
-      this.fetchSheet('Settings')
+      this.fetchSheet('Settings'),
+      this.fetchSheet('Billable Calls')
     ]);
-    this.cache = { scraped, analysis, generated, settings, ts: Date.now() };
+    this.cache = { scraped, analysis, generated, settings, calls, ts: Date.now() };
     return this.cache;
   }
 };
@@ -666,6 +701,152 @@ const Workflows = {
 // ============================================================
 // SHEET VIEW (Tabbed data browser)
 // ============================================================
+// ============================================================
+// PERFORMANCE — Billable Calls + Top Ads with Iterate actions
+// ============================================================
+const Performance = {
+  render(data) {
+    const calls = data.calls || [];
+    const generated = data.generated || [];
+
+    // Aggregate calls
+    const billable = calls.filter(c => (c.status || '').toLowerCase() === 'billable' || parseFloat(c.payout) > 0);
+    const totalRevenue = billable.reduce((sum, c) => sum + (parseFloat(c.payout) || 0), 0);
+    const avgPayout = billable.length > 0 ? totalRevenue / billable.length : 0;
+
+    // Group by ad_id (fallback to sub5_utm_content, then source)
+    const byAd = {};
+    for (const c of billable) {
+      const adId = c.ad_id || c.sub5_utm_content || c.source || 'unknown';
+      if (!byAd[adId]) byAd[adId] = { ad_id: adId, calls: 0, revenue: 0, source: c.source || '', last_call: '' };
+      byAd[adId].calls += 1;
+      byAd[adId].revenue += parseFloat(c.payout) || 0;
+      if (c.timestamp > byAd[adId].last_call) byAd[adId].last_call = c.timestamp;
+    }
+
+    // Attach matching generated creatives (by ad_id stored in based_on_ad_id, or by heuristic)
+    const attributedAds = Object.keys(byAd).filter(k => k !== 'unknown').length;
+
+    // Top performers (all with revenue > 0 for now; ROAS filter coming once spend data is pulled)
+    let rows = Object.values(byAd)
+      .filter(r => r.revenue > 0)
+      .sort((a, b) => b.revenue - a.revenue);
+
+    // If no billable calls yet, fall back to showing Generated Creatives so user has iterate buttons available
+    const fallback = rows.length === 0;
+    if (fallback) {
+      rows = generated
+        .filter(g => g.generated_image_url && (g.status || '').toLowerCase() !== 'iteration')
+        .slice(-20)
+        .reverse()
+        .map(g => ({
+          ad_id: g.creative_id || '',
+          calls: 0,
+          revenue: 0,
+          source: g.hook_type || g.based_on_angle || '',
+          headline: g.headline || '',
+          preview: g.generated_image_url || '',
+          creative_id: g.creative_id || '',
+          last_call: g.created_at || ''
+        }));
+    }
+
+    // Find a creative for each ad_id (for the iterate buttons)
+    for (const r of rows) {
+      if (!r.creative_id) {
+        const match = generated.find(g => g.creative_id === r.ad_id || g.based_on_ad_id === r.ad_id);
+        if (match) {
+          r.creative_id = match.creative_id;
+          r.headline = match.headline;
+          r.preview = match.generated_image_url;
+        }
+      }
+    }
+
+    // Stats
+    document.getElementById('perf-billable').textContent = billable.length;
+    document.getElementById('perf-billable-sub').textContent = `of ${calls.length} total calls`;
+    document.getElementById('perf-revenue').textContent = '$' + totalRevenue.toFixed(2);
+    document.getElementById('perf-revenue-sub').textContent = billable.length > 0 ? 'lifetime' : 'no billable calls yet';
+    document.getElementById('perf-avg').textContent = '$' + avgPayout.toFixed(2);
+    document.getElementById('perf-avg-sub').textContent = avgPayout > 0 ? 'per billable call' : '';
+    document.getElementById('perf-attributed').textContent = attributedAds;
+    document.getElementById('perf-attributed-sub').textContent = attributedAds > 0 ? 'ads with calls' : 'awaiting data';
+
+    const note = document.getElementById('perf-note');
+    if (fallback) {
+      note.innerHTML = 'No billable calls logged yet. Showing recent creatives so you can iterate manually. ROAS metrics activate once Meta Marketing API token is added.';
+    } else {
+      note.innerHTML = 'Sorted by revenue. Add Meta Marketing API token to compute ROAS (requires ad spend).';
+    }
+
+    // Table
+    const headRow = document.getElementById('perf-head');
+    const bodyEl = document.getElementById('perf-body');
+
+    if (fallback) {
+      headRow.innerHTML = ['Preview', 'Creative ID', 'Headline', 'Source/Angle', 'Created', 'Iterate'].map(h => `<th>${h}</th>`).join('');
+      bodyEl.innerHTML = rows.map(r => `
+        <tr>
+          <td>${r.preview ? `<a href="${r.preview}" target="_blank"><img src="${Performance.driveThumb(r.preview)}" style="max-width:60px;max-height:60px;border-radius:6px"></a>` : '—'}</td>
+          <td style="font-family:monospace;font-size:11px">${Performance.esc(r.creative_id)}</td>
+          <td>${Performance.esc((r.headline || '').slice(0, 80))}</td>
+          <td>${Performance.esc(r.source)}</td>
+          <td style="font-size:11px;color:var(--text-muted)">${Performance.fmtDate(r.last_call)}</td>
+          <td>
+            <button class="btn btn-sm btn-accent" onclick="Performance.iterate('creative','${Performance.esc(r.creative_id)}',3)" ${r.creative_id ? '' : 'disabled'}>New Images</button>
+            <button class="btn btn-sm btn-outline" onclick="Performance.iterate('copy','${Performance.esc(r.creative_id)}',3)" ${r.creative_id ? '' : 'disabled'}>New Copy</button>
+          </td>
+        </tr>
+      `).join('');
+    } else {
+      headRow.innerHTML = ['Preview', 'Ad ID', 'Calls', 'Revenue', 'Avg Payout', 'Source', 'Iterate'].map(h => `<th>${h}</th>`).join('');
+      bodyEl.innerHTML = rows.map(r => `
+        <tr>
+          <td>${r.preview ? `<a href="${r.preview}" target="_blank"><img src="${Performance.driveThumb(r.preview)}" style="max-width:60px;max-height:60px;border-radius:6px"></a>` : '—'}</td>
+          <td style="font-family:monospace;font-size:11px">${Performance.esc(r.ad_id)}</td>
+          <td>${r.calls}</td>
+          <td style="color:var(--success);font-weight:600">$${r.revenue.toFixed(2)}</td>
+          <td>$${(r.revenue / r.calls).toFixed(2)}</td>
+          <td>${Performance.esc(r.source)}</td>
+          <td>
+            <button class="btn btn-sm btn-accent" onclick="Performance.iterate('creative','${Performance.esc(r.creative_id || r.ad_id)}',3)" ${r.creative_id ? '' : 'disabled'}>New Images</button>
+            <button class="btn btn-sm btn-outline" onclick="Performance.iterate('copy','${Performance.esc(r.creative_id || r.ad_id)}',3)" ${r.creative_id ? '' : 'disabled'}>New Copy</button>
+          </td>
+        </tr>
+      `).join('');
+    }
+  },
+
+  esc(s) { return String(s || '').replace(/'/g, "\\'").replace(/"/g, '&quot;'); },
+  fmtDate(s) {
+    if (!s) return '—';
+    try { return new Date(s).toLocaleDateString(); } catch (e) { return s; }
+  },
+  driveThumb(url) {
+    const m = String(url).match(/drive\.google\.com\/file\/d\/([^\/]+)/);
+    return m ? `https://drive.google.com/thumbnail?id=${m[1]}&sz=w160` : url;
+  },
+
+  async iterate(type, creativeId, iterations) {
+    if (!creativeId) { Toast.show('No creative_id to iterate', 'error'); return; }
+    const endpoint = type === 'creative' ? 'ad-iterate-creative' : 'ad-iterate-copy';
+    const label = type === 'creative' ? 'New images' : 'New copy';
+    Toast.show(`${label} kicking off for ${creativeId}…`, 'info');
+    try {
+      const r = await fetch(`${CONFIG.n8nUrl}/webhook/${endpoint}?creative_id=${encodeURIComponent(creativeId)}&iterations=${iterations}`, { method: 'GET' });
+      if (r.ok) {
+        Toast.show(`${label} complete — check Generated Creatives`, 'success');
+        setTimeout(() => App.refresh(), 2000);
+      } else {
+        Toast.show(`${label} failed: HTTP ${r.status}`, 'error');
+      }
+    } catch (e) {
+      Toast.show(`${label} request error: ${e.message}`, 'error');
+    }
+  }
+};
+
 const SheetView = {
   currentTab: 'scraped',
   searchQuery: '',
@@ -1055,6 +1236,7 @@ const App = {
       renderPipeline(m);
       renderTypeChart(m);
       renderActivityFeed(data);
+      Performance.render(data);
       SheetView.render();
       const now = new Date();
       document.getElementById('lastUpdated').textContent = `Updated ${now.toLocaleTimeString()}`;
