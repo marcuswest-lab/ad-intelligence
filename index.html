@@ -259,6 +259,18 @@ tr:hover td { background: var(--bg-card-hover); }
   <!-- Progress Tracker (hidden when no jobs) -->
   <div class="card" id="progressTracker" style="display:none"></div>
 
+  <!-- Current Top Meta Ads -->
+  <div class="card" id="topAdsCard">
+    <h2><span class="dot" style="background:var(--warning)"></span> Current Top Meta Ads</h2>
+    <div id="top-ads-meta" style="font-size:12px;color:var(--text-muted);margin-bottom:12px"></div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr id="top-ads-head"></tr></thead>
+        <tbody id="top-ads-body"></tbody>
+      </table>
+    </div>
+  </div>
+
   <!-- Performance: Billable Calls + Top Performing Ads -->
   <div class="card" id="performanceCard">
     <h2><span class="dot" style="background:var(--success)"></span> Performance &amp; Top Performers</h2>
@@ -509,14 +521,15 @@ const DataService = {
   },
 
   async fetchAll() {
-    const [scraped, analysis, generated, settings, calls] = await Promise.all([
+    const [scraped, analysis, generated, settings, calls, metaSpend] = await Promise.all([
       this.fetchSheet('Scraped Ads'),
       this.fetchSheet('Analysis'),
       this.fetchSheet('Generated Creatives'),
       this.fetchSheet('Settings'),
-      this.fetchSheet('Billable Calls')
+      this.fetchSheet('Billable Calls'),
+      this.fetchSheet('Meta Spend')
     ]);
-    this.cache = { scraped, analysis, generated, settings, calls, ts: Date.now() };
+    this.cache = { scraped, analysis, generated, settings, calls, metaSpend, ts: Date.now() };
     return this.cache;
   }
 };
@@ -862,6 +875,115 @@ const Performance = {
       .catch(e => Toast.show(`${cfg.label} request error: ${e.message}`, 'error'));
 
     Toast.show(`${cfg.label} kicked off for ${creativeId.slice(-20)}…`, 'info');
+  }
+};
+
+// ============================================================
+// TOP ADS — current Meta ads ranked by recent performance
+// ============================================================
+const TopAds = {
+  LOOKBACK_DAYS: 14, // "recent" window
+
+  render(data) {
+    const spendRows = data.metaSpend || [];
+    const card = document.getElementById('topAdsCard');
+    if (!card) return;
+    if (spendRows.length === 0) {
+      card.style.display = 'none';
+      return;
+    }
+    card.style.display = '';
+
+    // Aggregate per ad over the lookback window (by most recent Day in the sheet)
+    const parseDay = s => { try { return new Date(s).getTime(); } catch (e) { return 0; } };
+    let latestTs = 0;
+    for (const r of spendRows) { const t = parseDay(r.day); if (t > latestTs) latestTs = t; }
+    const cutoffTs = latestTs - this.LOOKBACK_DAYS * 86400000;
+
+    const agg = {};
+    for (const r of spendRows) {
+      const ts = parseDay(r.day);
+      if (!ts || ts < cutoffTs) continue;
+      const spend = parseFloat(r.spend) || 0;
+      if (spend <= 0) continue; // only days where the ad actually spent
+      const name = r.ad_name || 'unknown';
+      if (!agg[name]) agg[name] = { name, spend: 0, impressions: 0, clicks: 0, ctrSum: 0, ctrDays: 0, days: 0, lastDay: '', lastStatus: '', lastTs: 0 };
+      const a = agg[name];
+      a.spend += spend;
+      a.impressions += parseFloat(r.impressions) || 0;
+      a.clicks += parseFloat(r.link_clicks || r.clicks_all) || 0;
+      const ctr = parseFloat(r.ctr_all) || 0;
+      if (ctr > 0) { a.ctrSum += ctr; a.ctrDays += 1; }
+      a.days += 1;
+      if (ts > a.lastTs) { a.lastTs = ts; a.lastDay = r.day || ''; a.lastStatus = r.delivery_status || ''; }
+    }
+
+    // Composite score: spend × avg_ctr × sqrt(days). Rewards big-spend, high-CTR, sustained ads.
+    const rows = Object.values(agg).map(a => {
+      const ctr = a.ctrDays > 0 ? a.ctrSum / a.ctrDays : 0;
+      const score = a.spend * Math.max(ctr, 0.1) * Math.sqrt(Math.max(a.days, 1));
+      return { ...a, ctr, score };
+    }).sort((a, b) => b.score - a.score);
+
+    const note = document.getElementById('top-ads-meta');
+    const latestStr = latestTs ? new Date(latestTs).toISOString().slice(0, 10) : 'n/a';
+    const allInactive = rows.every(r => r.lastStatus === 'not_delivering' || r.lastStatus === 'inactive');
+    note.innerHTML = `
+      Ranked by <strong>spend × CTR × √days</strong> over last ${this.LOOKBACK_DAYS} days (through ${latestStr}).
+      ${allInactive ? ' <span style="color:var(--warning)">Data appears stale — pull a fresh Meta CSV export and re-run <code>metaspend_backfill.py</code>.</span>' : ''}
+    `;
+
+    const head = document.getElementById('top-ads-head');
+    const body = document.getElementById('top-ads-body');
+    head.innerHTML = ['Ad Name', 'Spend', 'CTR', 'Impressions', 'Days', 'Last Active', 'Status', 'Iterate'].map(h => `<th>${h}</th>`).join('');
+
+    if (rows.length === 0) {
+      body.innerHTML = `<tr><td colspan="8" style="color:var(--text-muted);padding:12px 0">No ads had spend in the last ${this.LOOKBACK_DAYS} days.</td></tr>`;
+      return;
+    }
+    body.innerHTML = rows.slice(0, 10).map(r => {
+      const nameEsc = Performance.esc(r.name);
+      const statusColor = (r.lastStatus === 'not_delivering' || r.lastStatus === 'inactive') ? 'var(--text-muted)' : 'var(--success)';
+      return `
+        <tr>
+          <td><strong>${nameEsc}</strong></td>
+          <td>$${r.spend.toFixed(2)}</td>
+          <td style="color:${r.ctr >= 3 ? 'var(--success)' : 'var(--text-dim)'};font-weight:${r.ctr >= 3 ? '600' : '400'}">${r.ctr.toFixed(2)}%</td>
+          <td>${Math.round(r.impressions).toLocaleString()}</td>
+          <td>${r.days}</td>
+          <td style="font-size:11px;color:var(--text-muted)">${r.lastDay || '—'}</td>
+          <td style="color:${statusColor};font-size:12px">${Performance.esc(r.lastStatus || 'active')}</td>
+          <td>
+            <button class="btn btn-sm btn-outline" onclick="TopAds.iterateStyle('${nameEsc}')" title="Generate new creatives inspired by this winner">Iterate Style</button>
+          </td>
+        </tr>
+      `;
+    }).join('');
+  },
+
+  iterateStyle(adName) {
+    const desc = prompt(
+      `Iterate on winning ad: ${adName}\n\n` +
+      `Describe this ad's style, hook, and angle so Claude can generate similar creatives.\n` +
+      `Examples:\n` +
+      `  "Quiz-style static ad, question-driven hook asking if you qualify for debt relief, green accent colors"\n` +
+      `  "Reddit-post style, social proof angle, testimonial quote overlay on dark background"\n\n` +
+      `Description:`
+    );
+    if (!desc || !desc.trim()) return;
+    // Fire WF13 (Iterate From Description) — new workflow that takes free-text brief
+    const url = `${CONFIG.n8nUrl}/webhook/ad-iterate-from-description?source_name=${encodeURIComponent(adName)}&description=${encodeURIComponent(desc.trim())}&iterations=3`;
+    ProgressTracker.start({
+      id: `desc_${adName}_${Date.now()}`,
+      type: 'creative',
+      creativeId: adName,
+      label: `New images from "${adName}"`,
+      expectedSec: ProgressTracker.expectedFor('creative') || 55
+    });
+    fetch(url, { method: 'GET' })
+      .then(r => { if (!r.ok) Toast.show(`Iterate returned HTTP ${r.status}`, 'error'); setTimeout(() => App.refresh(), 2000); })
+      .catch(e => Toast.show(`Iterate error: ${e.message}`, 'error'));
+    Toast.show(`Generating creatives inspired by ${adName}…`, 'info');
   }
 };
 
@@ -1425,6 +1547,7 @@ const App = {
       renderPipeline(m);
       renderTypeChart(m);
       renderActivityFeed(data);
+      TopAds.render(data);
       Performance.render(data);
       SheetView.render();
       const now = new Date();
