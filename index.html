@@ -1441,12 +1441,22 @@ const SheetView = {
             return `<td><strong>${val || '-'}</strong></td>`;
           }
 
-          // Image/video preview
+          // Image preview — Drive URLs need the thumbnail endpoint to actually render as an image
           if ((c === 'generated_image_url' || c === 'image_url') && val && val.startsWith('http') && !val.includes('api.replicate.com/v1/predictions')) {
-            return `<td><a href="${val}" target="_blank"><img src="${val}" style="max-width:80px;max-height:50px;border-radius:4px;vertical-align:middle" onerror="this.outerHTML='<span style=color:var(--text-muted)>-</span>'"></a></td>`;
+            const driveMatch = val.match(/drive\.google\.com\/file\/d\/([^\/]+)/) || val.match(/drive\.google\.com\/.*?[?&]id=([^&]+)/);
+            const imgSrc = driveMatch ? `https://drive.google.com/thumbnail?id=${driveMatch[1]}&sz=w240` : val;
+            return `<td style="white-space:nowrap">
+              <a href="${val}" target="_blank" title="Open in new tab"><img src="${imgSrc}" style="max-width:90px;max-height:55px;border-radius:4px;vertical-align:middle;box-shadow:0 1px 3px rgba(0,0,0,0.3)" onerror="this.outerHTML='<span style=color:var(--text-muted);font-size:11px>(preview unavailable)</span>'"></a>
+              <a href="${val}" target="_blank" style="color:var(--accent);font-size:11px;margin-left:8px;text-decoration:underline">Open</a>
+            </td>`;
           }
           if (c === 'video_url' && val && val.startsWith('http')) {
-            return `<td><a href="${val}" target="_blank" style="color:var(--accent);font-size:12px">Watch</a></td>`;
+            const driveMatch = val.match(/drive\.google\.com\/file\/d\/([^\/]+)/);
+            const thumbSrc = driveMatch ? `https://drive.google.com/thumbnail?id=${driveMatch[1]}&sz=w240` : '';
+            return `<td style="white-space:nowrap">
+              ${thumbSrc ? `<a href="${val}" target="_blank"><img src="${thumbSrc}" style="max-width:90px;max-height:55px;border-radius:4px;vertical-align:middle;box-shadow:0 1px 3px rgba(0,0,0,0.3)" onerror="this.outerHTML='<span style=color:var(--text-muted);font-size:11px>video</span>'"></a>` : ''}
+              <a href="${val}" target="_blank" style="color:var(--accent);font-size:11px;margin-left:8px;text-decoration:underline">▶ Watch</a>
+            </td>`;
           }
 
           // Truncate long text
