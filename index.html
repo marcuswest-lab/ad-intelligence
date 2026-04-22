@@ -790,9 +790,15 @@ const Performance = {
       revBody.innerHTML = `<tr><td style="color:var(--text-muted);padding:12px 0">No billable calls yet.</td></tr>`;
     }
 
-    // === Iterate table: always real creative_ids from Generated Creatives ===
+    // === Iterate table: real source creatives only (not iterations of other creatives) ===
     const iterRows = generated
-      .filter(g => g.creative_id && (g.generated_image_url || g.video_url) && !g.iteration_of)
+      .filter(g => {
+        if (!g.creative_id) return false;
+        if (!(g.generated_image_url || g.video_url)) return false;
+        if (g.iteration_of) return false;           // tagged as an iteration
+        if (g.creative_id.startsWith('iter_')) return false;  // untagged iteration
+        return true;
+      })
       .slice(-20)
       .reverse();
 
