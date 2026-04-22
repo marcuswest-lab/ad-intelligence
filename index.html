@@ -1329,6 +1329,23 @@ const SheetView = {
     this.render();
   },
 
+  iterateScraped(adId, iterations) {
+    if (!adId) { Toast.show('No ad_id', 'error'); return; }
+    const label = `Variations from scraped ${adId.slice(-10)}`;
+    ProgressTracker.start({
+      id: `scraped_${adId}_${Date.now()}`,
+      type: 'creative',
+      creativeId: adId,
+      label,
+      expectedSec: ProgressTracker.expectedFor('creative') || 55
+    });
+    const url = `${CONFIG.n8nUrl}/webhook/ad-iterate-from-scraped?ad_id=${encodeURIComponent(adId)}&iterations=${iterations}`;
+    fetch(url, { method: 'GET' })
+      .then(r => { if (!r.ok) Toast.show(`Iterate failed: HTTP ${r.status}`, 'error'); setTimeout(() => App.refresh(), 2000); })
+      .catch(e => Toast.show(`Iterate error: ${e.message}`, 'error'));
+    Toast.show(`${label} kicked off…`, 'info');
+  },
+
   setFilter(f) {
     this.filter = f;
     this.render();
@@ -1489,10 +1506,22 @@ const SheetView = {
       });
     }
 
+    // Iterate action for scraped ads with an image
+    let actions = '';
+    if (this.currentTab === 'scraped' && r.image_url && r.image_url.startsWith('http')) {
+      const adId = (r.ad_id || '').replace(/'/g, "\\'");
+      actions = `
+        <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);display:flex;gap:8px;align-items:center">
+          <strong style="color:var(--text-dim);font-size:12px">Iterate on this winner:</strong>
+          <button class="btn btn-sm btn-outline" onclick="event.stopPropagation(); SheetView.iterateScraped('${adId}', 3)">Generate 3 Variations (vision-based)</button>
+          <span style="color:var(--text-muted);font-size:11px">Claude analyzes the actual ad image and produces new Spanish creatives matching the style</span>
+        </div>`;
+    }
+
     const colCount = (cfg.cols || Object.keys(r)).length;
     const tr = document.createElement('tr');
     tr.className = 'expanded-row';
-    tr.innerHTML = `<td colspan="${colCount}" style="padding:12px"><div class="ad-preview">${content || 'No additional details'}</div></td>`;
+    tr.innerHTML = `<td colspan="${colCount}" style="padding:12px"><div class="ad-preview">${content || 'No additional details'}${actions}</div></td>`;
     row.after(tr);
   }
 };
