@@ -285,10 +285,20 @@ tr:hover td { background: var(--bg-card-hover); }
       </div>
     </div>
     <div id="perf-note" style="font-size:12px;color:var(--text-muted);margin-bottom:12px"></div>
+
+    <h3 style="margin:18px 0 10px 0;font-size:14px;color:var(--text-dim)">Revenue Breakdown</h3>
+    <div class="table-wrap" style="margin-bottom:16px">
+      <table>
+        <thead><tr id="perf-rev-head"></tr></thead>
+        <tbody id="perf-rev-body"></tbody>
+      </table>
+    </div>
+
+    <h3 style="margin:18px 0 10px 0;font-size:14px;color:var(--text-dim)">Iterate on Creatives</h3>
     <div class="table-wrap">
       <table>
-        <thead><tr id="perf-head"></tr></thead>
-        <tbody id="perf-body"></tbody>
+        <thead><tr id="perf-iter-head"></tr></thead>
+        <tbody id="perf-iter-body"></tbody>
       </table>
     </div>
   </div>
@@ -740,43 +750,7 @@ const Performance = {
     }
 
     // Attach matching generated creatives (by ad_id stored in based_on_ad_id, or by heuristic)
-    const attributedAds = Object.keys(byAd).filter(k => k !== 'unknown').length;
-
-    // Top performers (all with revenue > 0 for now; ROAS filter coming once spend data is pulled)
-    let rows = Object.values(byAd)
-      .filter(r => r.revenue > 0)
-      .sort((a, b) => b.revenue - a.revenue);
-
-    // If no billable calls yet, fall back to showing Generated Creatives so user has iterate buttons available
-    const fallback = rows.length === 0;
-    if (fallback) {
-      rows = generated
-        .filter(g => g.generated_image_url && (g.status || '').toLowerCase() !== 'iteration')
-        .slice(-20)
-        .reverse()
-        .map(g => ({
-          ad_id: g.creative_id || '',
-          calls: 0,
-          revenue: 0,
-          source: g.hook_type || g.based_on_angle || '',
-          headline: g.headline || '',
-          preview: g.generated_image_url || '',
-          creative_id: g.creative_id || '',
-          last_call: g.created_at || ''
-        }));
-    }
-
-    // Find a creative for each ad_id (for the iterate buttons)
-    for (const r of rows) {
-      if (!r.creative_id) {
-        const match = generated.find(g => g.creative_id === r.ad_id || g.based_on_ad_id === r.ad_id);
-        if (match) {
-          r.creative_id = match.creative_id;
-          r.headline = match.headline;
-          r.preview = match.generated_image_url;
-        }
-      }
-    }
+    const attributedAds = Object.keys(byAd).filter(k => k !== 'Unknown' && k !== 'unknown' && k).length;
 
     // Stats
     document.getElementById('perf-billable').textContent = billable.length;
@@ -786,49 +760,66 @@ const Performance = {
     document.getElementById('perf-avg').textContent = '$' + avgPayout.toFixed(2);
     document.getElementById('perf-avg-sub').textContent = avgPayout > 0 ? 'per billable call' : '';
     document.getElementById('perf-attributed').textContent = attributedAds;
-    document.getElementById('perf-attributed-sub').textContent = attributedAds > 0 ? 'ads with calls' : 'awaiting data';
+    document.getElementById('perf-attributed-sub').textContent = attributedAds > 0 ? 'ads with ad_id attribution' : 'calls missing ad_id';
 
-    const note = document.getElementById('perf-note');
-    if (fallback) {
-      note.innerHTML = 'No billable calls logged yet. Showing recent creatives so you can iterate manually. ROAS metrics activate once Meta Marketing API token is added.';
-    } else {
-      note.innerHTML = 'Sorted by revenue. Add Meta Marketing API token to compute ROAS (requires ad spend).';
-    }
+    document.getElementById('perf-note').innerHTML =
+      attributedAds === 0 && billable.length > 0
+        ? 'Historical calls are missing <code>ad_id</code>. New calls from Apr 11 onward will carry it via DNI passthrough. Meta spend data + ROAS unlocks once Meta Marketing API token is added.'
+        : 'Revenue grouped by ad_id. Meta spend data + ROAS unlocks once Meta Marketing API token is added.';
 
-    // Table
-    const headRow = document.getElementById('perf-head');
-    const bodyEl = document.getElementById('perf-body');
+    // === Revenue Breakdown (grouped by ad_id, no buttons) ===
+    const revRows = Object.values(byAd)
+      .filter(r => r.revenue > 0)
+      .sort((a, b) => b.revenue - a.revenue);
 
-    const iterateBtns = (cid) => `
-      <button class="btn btn-sm btn-accent" onclick="Performance.iterate('creative','${cid}',3)" ${cid ? '' : 'disabled'}>New Images</button>
-      <button class="btn btn-sm btn-outline" onclick="Performance.iterate('copy','${cid}',3)" ${cid ? '' : 'disabled'}>New Copy</button>
-      <button class="btn btn-sm btn-outline" onclick="Performance.iterate('video','${cid}',1)" ${cid ? '' : 'disabled'} title="Takes ~15 min">New Video</button>`;
-
-    if (fallback) {
-      headRow.innerHTML = ['Preview', 'Creative ID', 'Headline', 'Source/Angle', 'Created', 'Iterate'].map(h => `<th>${h}</th>`).join('');
-      bodyEl.innerHTML = rows.map(r => `
+    const revHead = document.getElementById('perf-rev-head');
+    const revBody = document.getElementById('perf-rev-body');
+    if (revRows.length > 0) {
+      revHead.innerHTML = ['Ad ID', 'Source', 'Calls', 'Revenue', 'Avg Payout'].map(h => `<th>${h}</th>`).join('');
+      revBody.innerHTML = revRows.map(r => `
         <tr>
-          <td>${r.preview ? `<a href="${r.preview}" target="_blank"><img src="${Performance.driveThumb(r.preview)}" style="max-width:60px;max-height:60px;border-radius:6px"></a>` : '—'}</td>
-          <td style="font-family:monospace;font-size:11px">${Performance.esc(r.creative_id)}</td>
-          <td>${Performance.esc((r.headline || '').slice(0, 80))}</td>
-          <td>${Performance.esc(r.source)}</td>
-          <td style="font-size:11px;color:var(--text-muted)">${Performance.fmtDate(r.last_call)}</td>
-          <td>${iterateBtns(Performance.esc(r.creative_id))}</td>
-        </tr>
-      `).join('');
-    } else {
-      headRow.innerHTML = ['Preview', 'Ad ID', 'Calls', 'Revenue', 'Avg Payout', 'Source', 'Iterate'].map(h => `<th>${h}</th>`).join('');
-      bodyEl.innerHTML = rows.map(r => `
-        <tr>
-          <td>${r.preview ? `<a href="${r.preview}" target="_blank"><img src="${Performance.driveThumb(r.preview)}" style="max-width:60px;max-height:60px;border-radius:6px"></a>` : '—'}</td>
           <td style="font-family:monospace;font-size:11px">${Performance.esc(r.ad_id)}</td>
+          <td>${Performance.esc(r.source)}</td>
           <td>${r.calls}</td>
           <td style="color:var(--success);font-weight:600">$${r.revenue.toFixed(2)}</td>
           <td>$${(r.revenue / r.calls).toFixed(2)}</td>
-          <td>${Performance.esc(r.source)}</td>
-          <td>${iterateBtns(Performance.esc(r.creative_id || r.ad_id))}</td>
         </tr>
       `).join('');
+    } else {
+      revHead.innerHTML = '';
+      revBody.innerHTML = `<tr><td style="color:var(--text-muted);padding:12px 0">No billable calls yet.</td></tr>`;
+    }
+
+    // === Iterate table: always real creative_ids from Generated Creatives ===
+    const iterRows = generated
+      .filter(g => g.creative_id && (g.generated_image_url || g.video_url) && !g.iteration_of)
+      .slice(-20)
+      .reverse();
+
+    const iterHead = document.getElementById('perf-iter-head');
+    const iterBody = document.getElementById('perf-iter-body');
+    iterHead.innerHTML = ['Preview', 'Creative ID', 'Headline', 'Angle', 'Created', 'Iterate'].map(h => `<th>${h}</th>`).join('');
+    if (iterRows.length === 0) {
+      iterBody.innerHTML = `<tr><td colspan="6" style="color:var(--text-muted);padding:12px 0">No source creatives available. Run Generate Static Ads / Generate Video Ads first.</td></tr>`;
+    } else {
+      iterBody.innerHTML = iterRows.map(g => {
+        const cid = Performance.esc(g.creative_id);
+        const preview = g.generated_image_url || g.video_url || '';
+        return `
+          <tr>
+            <td>${preview ? `<a href="${preview}" target="_blank"><img src="${Performance.driveThumb(preview)}" style="max-width:60px;max-height:60px;border-radius:6px"></a>` : '—'}</td>
+            <td style="font-family:monospace;font-size:11px">${cid}</td>
+            <td>${Performance.esc((g.headline || '').slice(0, 70))}</td>
+            <td style="font-size:12px;color:var(--text-muted)">${Performance.esc(g.hook_type || g.based_on_angle || '')}</td>
+            <td style="font-size:11px;color:var(--text-muted)">${Performance.fmtDate(g.created_at)}</td>
+            <td>
+              <button class="btn btn-sm btn-outline" onclick="Performance.iterate('creative','${cid}',3)">New Images</button>
+              <button class="btn btn-sm btn-outline" onclick="Performance.iterate('copy','${cid}',3)">New Copy</button>
+              <button class="btn btn-sm btn-outline" onclick="Performance.iterate('video','${cid}',1)" title="~15 min">New Video</button>
+            </td>
+          </tr>
+        `;
+      }).join('');
     }
   },
 
@@ -845,14 +836,15 @@ const Performance = {
   iterate(type, creativeId, iterations) {
     if (!creativeId) { Toast.show('No creative_id to iterate', 'error'); return; }
     const cfg = {
-      creative: { endpoint: 'ad-iterate-creative', label: 'New images', expectedSec: 60, qs: `&iterations=${iterations}` },
-      copy:     { endpoint: 'ad-iterate-copy',     label: 'New copy',   expectedSec: 35, qs: `&iterations=${iterations}` },
-      video:    { endpoint: 'ad-iterate-video',    label: 'New video',  expectedSec: 900, qs: '&video_format=ugc' }
+      creative: { endpoint: 'ad-iterate-creative', label: 'New images', defaultSec: 55,  qs: `&iterations=${iterations}` },
+      copy:     { endpoint: 'ad-iterate-copy',     label: 'New copy',   defaultSec: 25,  qs: `&iterations=${iterations}` },
+      video:    { endpoint: 'ad-iterate-video',    label: 'New video',  defaultSec: 660, qs: '&video_format=ugc' }
     }[type];
     if (!cfg) return;
 
-    // Register job in progress tracker — don't await fetch (video takes 15 min)
-    ProgressTracker.start({ id: `${type}_${creativeId}_${Date.now()}`, type, creativeId, label: cfg.label, expectedSec: cfg.expectedSec });
+    // Use adaptive expected time: median of past successful runs for this type, fallback to default
+    const expectedSec = ProgressTracker.expectedFor(type) || cfg.defaultSec;
+    ProgressTracker.start({ id: `${type}_${creativeId}_${Date.now()}`, type, creativeId, label: cfg.label, expectedSec });
 
     const url = `${CONFIG.n8nUrl}/webhook/${cfg.endpoint}?creative_id=${encodeURIComponent(creativeId)}${cfg.qs}`;
     fetch(url, { method: 'GET' })
@@ -872,8 +864,11 @@ const Performance = {
 // ============================================================
 const ProgressTracker = {
   STORAGE_KEY: 'ai_dashboard_progress_jobs',
+  HISTORY_KEY: 'ai_dashboard_progress_history',
   POLL_INTERVAL: 12000,
+  HISTORY_MAX: 10,      // keep last N completed durations per type
   jobs: [],
+  history: { creative: [], copy: [], video: [] },
   pollTimer: null,
 
   load() {
@@ -882,9 +877,36 @@ const ProgressTracker = {
     // Drop jobs older than 30 min since anything beyond that has almost certainly timed out
     const cutoff = Date.now() - 30 * 60 * 1000;
     this.jobs = this.jobs.filter(j => j.startedAt > cutoff);
+    try { this.history = JSON.parse(localStorage.getItem(this.HISTORY_KEY) || '{"creative":[],"copy":[],"video":[]}'); }
+    catch (e) { this.history = { creative: [], copy: [], video: [] }; }
+    // Seed with real historical durations (from n8n executions) on first load — baseline for adaptive bar
+    if ((this.history.creative || []).length === 0) this.history.creative = [52, 54, 49, 49];
+    if ((this.history.copy     || []).length === 0) this.history.copy     = [22];
+    if ((this.history.video    || []).length === 0) this.history.video    = [624, 867, 492];
     this.save();
   },
-  save() { localStorage.setItem(this.STORAGE_KEY, JSON.stringify(this.jobs)); },
+  save() {
+    localStorage.setItem(this.STORAGE_KEY, JSON.stringify(this.jobs));
+    localStorage.setItem(this.HISTORY_KEY, JSON.stringify(this.history));
+  },
+
+  // Median of recent completed durations (seconds). Returns null if no history yet.
+  expectedFor(type) {
+    const arr = (this.history[type] || []).slice();
+    if (arr.length === 0) return null;
+    arr.sort((a, b) => a - b);
+    const mid = Math.floor(arr.length / 2);
+    return arr.length % 2 === 0 ? Math.round((arr[mid - 1] + arr[mid]) / 2) : arr[mid];
+  },
+
+  recordCompletion(type, durationSec) {
+    if (!this.history[type]) this.history[type] = [];
+    this.history[type].push(durationSec);
+    if (this.history[type].length > this.HISTORY_MAX) {
+      this.history[type] = this.history[type].slice(-this.HISTORY_MAX);
+    }
+    this.save();
+  },
 
   start(job) {
     job.startedAt = Date.now();
@@ -923,8 +945,11 @@ const ProgressTracker = {
         job.status = 'done';
         job.finishedAt = now;
         job.resultCount = matches.length;
+        // Record actual duration for adaptive progress on next run
+        const durationSec = Math.round((now - job.startedAt) / 1000);
+        this.recordCompletion(job.type, durationSec);
         anyUpdate = true;
-        Toast.show(`${job.label} done for ${job.creativeId.slice(-20)} (${matches.length} new)`, 'success');
+        Toast.show(`${job.label} done for ${job.creativeId.slice(-20)} (${matches.length} new, ${this.fmtTime(durationSec)})`, 'success');
       } else if (now - job.startedAt > job.expectedSec * 2500) {
         // 2.5x expected time = consider timed out
         job.status = 'timeout';
