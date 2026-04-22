@@ -259,9 +259,13 @@ tr:hover td { background: var(--bg-card-hover); }
   <!-- Progress Tracker (hidden when no jobs) -->
   <div class="card" id="progressTracker" style="display:none"></div>
 
-  <!-- Current Top Meta Ads -->
+  <!-- Meta Ads Performance -->
   <div class="card" id="topAdsCard">
-    <h2><span class="dot" style="background:var(--warning)"></span> Current Top Meta Ads</h2>
+    <h2><span class="dot" style="background:var(--warning)"></span> Meta Ads Performance</h2>
+    <div class="sheet-tabs" id="metaAdsTabs" style="margin-top:4px;margin-bottom:12px">
+      <button class="sheet-tab active" onclick="TopAds.switchTab('live')">Live (last 14d)</button>
+      <button class="sheet-tab" onclick="TopAds.switchTab('alltime')">All-Time</button>
+    </div>
     <div id="top-ads-meta" style="font-size:12px;color:var(--text-muted);margin-bottom:12px"></div>
     <div class="table-wrap">
       <table>
@@ -286,14 +290,14 @@ tr:hover td { background: var(--bg-card-hover); }
         <div class="sub" id="perf-revenue-sub"></div>
       </div>
       <div class="metric-card warning">
-        <div class="label">Avg Payout</div>
-        <div class="value" id="perf-avg">--</div>
-        <div class="sub" id="perf-avg-sub"></div>
+        <div class="label">Total Spend</div>
+        <div class="value" id="perf-spend">--</div>
+        <div class="sub" id="perf-spend-sub"></div>
       </div>
       <div class="metric-card">
-        <div class="label">Attributed Ads</div>
-        <div class="value" id="perf-attributed">--</div>
-        <div class="sub" id="perf-attributed-sub"></div>
+        <div class="label">ROAS</div>
+        <div class="value" id="perf-roas">--</div>
+        <div class="sub" id="perf-roas-sub"></div>
       </div>
     </div>
     <div id="perf-note" style="font-size:12px;color:var(--text-muted);margin-bottom:12px"></div>
@@ -763,22 +767,26 @@ const Performance = {
     }
 
     // Attach matching generated creatives (by ad_id stored in based_on_ad_id, or by heuristic)
-    const attributedAds = Object.keys(byAd).filter(k => k !== 'Unknown' && k !== 'unknown' && k).length;
+    // Total spend across all Meta Spend rows (lifetime)
+    const spendRows = data.metaSpend || [];
+    const totalSpend = spendRows.reduce((s, r) => s + (parseFloat(r.spend) || 0), 0);
+    const roas = totalSpend > 0 ? totalRevenue / totalSpend : 0;
 
-    // Stats
     document.getElementById('perf-billable').textContent = billable.length;
     document.getElementById('perf-billable-sub').textContent = `of ${calls.length} total calls`;
     document.getElementById('perf-revenue').textContent = '$' + totalRevenue.toFixed(2);
     document.getElementById('perf-revenue-sub').textContent = billable.length > 0 ? 'lifetime' : 'no billable calls yet';
-    document.getElementById('perf-avg').textContent = '$' + avgPayout.toFixed(2);
-    document.getElementById('perf-avg-sub').textContent = avgPayout > 0 ? 'per billable call' : '';
-    document.getElementById('perf-attributed').textContent = attributedAds;
-    document.getElementById('perf-attributed-sub').textContent = attributedAds > 0 ? 'ads with ad_id attribution' : 'calls missing ad_id';
+    document.getElementById('perf-spend').textContent = '$' + totalSpend.toFixed(2);
+    document.getElementById('perf-spend-sub').textContent = spendRows.length > 0 ? `${spendRows.length} ad×day rows` : 'no Meta data';
+    const roasEl = document.getElementById('perf-roas');
+    roasEl.textContent = totalSpend > 0 ? roas.toFixed(2) + 'x' : '--';
+    roasEl.style.color = roas >= 1 ? 'var(--success)' : (roas > 0 ? 'var(--warning)' : '');
+    document.getElementById('perf-roas-sub').textContent = totalSpend > 0 ? 'revenue / spend' : 'awaiting spend data';
 
     document.getElementById('perf-note').innerHTML =
-      attributedAds === 0 && billable.length > 0
-        ? 'Historical calls are missing <code>ad_id</code>. New calls from Apr 11 onward will carry it via DNI passthrough. Meta spend data + ROAS unlocks once Meta Marketing API token is added.'
-        : 'Revenue grouped by ad_id. Meta spend data + ROAS unlocks once Meta Marketing API token is added.';
+      (totalSpend > 0 && totalRevenue > 0)
+        ? 'Lifetime ROAS shown above. Per-ad ROAS in the Meta Ads table requires matching calls to specific ads — add "Ad ID" to your Meta export columns or unblock the Meta Marketing API token.'
+        : 'Revenue grouped by ad_id below. ROAS calculation requires both ad spend + billable calls — populate the Meta Spend tab and ensure DNI attribution is flowing.';
 
     // === Revenue Breakdown (grouped by ad_id, no buttons) ===
     const revRows = Object.values(byAd)
@@ -882,79 +890,138 @@ const Performance = {
 // TOP ADS — current Meta ads ranked by recent performance
 // ============================================================
 const TopAds = {
-  LOOKBACK_DAYS: 14, // "recent" window
+  LOOKBACK_DAYS: 14,
+  currentTab: 'live',
+  lastData: null,
+
+  switchTab(tab) {
+    this.currentTab = tab;
+    document.querySelectorAll('#metaAdsTabs .sheet-tab').forEach(t => t.classList.remove('active'));
+    const btn = document.querySelector(`#metaAdsTabs .sheet-tab[onclick*="${tab}"]`);
+    if (btn) btn.classList.add('active');
+    if (this.lastData) this.render(this.lastData);
+  },
 
   render(data) {
+    this.lastData = data;
     const spendRows = data.metaSpend || [];
+    const calls = data.calls || [];
     const card = document.getElementById('topAdsCard');
     if (!card) return;
-    if (spendRows.length === 0) {
-      card.style.display = 'none';
-      return;
-    }
+    if (spendRows.length === 0) { card.style.display = 'none'; return; }
     card.style.display = '';
 
-    // Aggregate per ad over the lookback window (by most recent Day in the sheet)
     const parseDay = s => { try { return new Date(s).getTime(); } catch (e) { return 0; } };
     let latestTs = 0;
     for (const r of spendRows) { const t = parseDay(r.day); if (t > latestTs) latestTs = t; }
     const cutoffTs = latestTs - this.LOOKBACK_DAYS * 86400000;
+    const liveOnly = this.currentTab === 'live';
 
+    // Aggregate per ad across the chosen window
     const agg = {};
     for (const r of spendRows) {
       const ts = parseDay(r.day);
-      if (!ts || ts < cutoffTs) continue;
+      if (!ts) continue;
+      if (liveOnly && ts < cutoffTs) continue;
       const spend = parseFloat(r.spend) || 0;
-      if (spend <= 0) continue; // only days where the ad actually spent
+      if (liveOnly && spend <= 0) continue; // Live tab: only rows with actual spend
       const name = r.ad_name || 'unknown';
-      if (!agg[name]) agg[name] = { name, spend: 0, impressions: 0, clicks: 0, ctrSum: 0, ctrDays: 0, days: 0, lastDay: '', lastStatus: '', lastTs: 0 };
+      if (!agg[name]) agg[name] = { name, spend: 0, impressions: 0, linkClicks: 0, ctrSum: 0, ctrDays: 0, days: 0, lastDay: '', lastStatus: '', lastTs: 0 };
       const a = agg[name];
       a.spend += spend;
       a.impressions += parseFloat(r.impressions) || 0;
-      a.clicks += parseFloat(r.link_clicks || r.clicks_all) || 0;
+      a.linkClicks += parseFloat(r.link_clicks) || 0;
       const ctr = parseFloat(r.ctr_all) || 0;
       if (ctr > 0) { a.ctrSum += ctr; a.ctrDays += 1; }
       a.days += 1;
       if (ts > a.lastTs) { a.lastTs = ts; a.lastDay = r.day || ''; a.lastStatus = r.delivery_status || ''; }
     }
 
-    // Composite score: spend × avg_ctr × sqrt(days). Rewards big-spend, high-CTR, sustained ads.
+    // Attribute calls + revenue to each ad by matching on ad_id OR ad_name in the call's sub fields
+    const callsByName = {};
+    const callsById = {};
+    for (const c of calls) {
+      const rev = parseFloat(c.payout) || 0;
+      if (c.ad_id) {
+        if (!callsById[c.ad_id]) callsById[c.ad_id] = { count: 0, rev: 0 };
+        callsById[c.ad_id].count += 1;
+        callsById[c.ad_id].rev += rev;
+      }
+      // Fallback: match on sub4_utm_campaign / sub5_utm_content substrings against the ad name
+      const nameHint = (c.sub5_utm_content || c.sub4_utm_campaign || '').trim();
+      if (nameHint) {
+        if (!callsByName[nameHint]) callsByName[nameHint] = { count: 0, rev: 0 };
+        callsByName[nameHint].count += 1;
+        callsByName[nameHint].rev += rev;
+      }
+    }
+
+    // Compose final rows with ROAS
     const rows = Object.values(agg).map(a => {
       const ctr = a.ctrDays > 0 ? a.ctrSum / a.ctrDays : 0;
-      const score = a.spend * Math.max(ctr, 0.1) * Math.sqrt(Math.max(a.days, 1));
-      return { ...a, ctr, score };
-    }).sort((a, b) => b.score - a.score);
+      // Try to match calls: first exact ad_id (not in CSV yet), then by ad_name substring
+      let matched = callsById[a.name];
+      if (!matched) {
+        // Partial name match: look for any callsByName key that appears in the ad name
+        for (const [k, v] of Object.entries(callsByName)) {
+          if (k && a.name.includes(k)) { matched = v; break; }
+        }
+      }
+      const callCount = matched ? matched.count : 0;
+      const revenue = matched ? matched.rev : 0;
+      const roas = a.spend > 0 ? revenue / a.spend : 0;
+      const cpc = a.linkClicks > 0 ? a.spend / a.linkClicks : 0;
+      return { ...a, ctr, callCount, revenue, roas, cpc };
+    });
 
+    // Sort: Live tab by composite winner-score; All-Time by total spend
+    if (liveOnly) {
+      rows.sort((x, y) => (y.spend * Math.max(y.ctr, 0.1) * Math.sqrt(Math.max(y.days, 1))) - (x.spend * Math.max(x.ctr, 0.1) * Math.sqrt(Math.max(x.days, 1))));
+    } else {
+      rows.sort((x, y) => y.spend - x.spend);
+    }
+
+    // Meta note
     const note = document.getElementById('top-ads-meta');
     const latestStr = latestTs ? new Date(latestTs).toISOString().slice(0, 10) : 'n/a';
-    const allInactive = rows.every(r => r.lastStatus === 'not_delivering' || r.lastStatus === 'inactive');
+    const allInactive = liveOnly && rows.length > 0 && rows.every(r => r.lastStatus === 'not_delivering' || r.lastStatus === 'inactive');
+    const totalSpend = rows.reduce((s, r) => s + r.spend, 0);
+    const totalRev = rows.reduce((s, r) => s + r.revenue, 0);
+    const totalRoas = totalSpend > 0 ? totalRev / totalSpend : 0;
+    const windowLabel = liveOnly ? `last ${this.LOOKBACK_DAYS} days through ${latestStr}` : 'all recorded history';
     note.innerHTML = `
-      Ranked by <strong>spend × CTR × √days</strong> over last ${this.LOOKBACK_DAYS} days (through ${latestStr}).
-      ${allInactive ? ' <span style="color:var(--warning)">Data appears stale — pull a fresh Meta CSV export and re-run <code>metaspend_backfill.py</code>.</span>' : ''}
+      ${rows.length} ads · Total spend $${totalSpend.toFixed(2)} · Total revenue $${totalRev.toFixed(2)} · ROAS <strong style="color:${totalRoas >= 1 ? 'var(--success)' : 'var(--warning)'}">${totalRoas.toFixed(2)}x</strong> (${windowLabel}).
+      ${allInactive ? ' <span style="color:var(--warning)">All ads show as inactive — pull a fresh Meta export.</span>' : ''}
+      ${rows.every(r => r.revenue === 0) ? ' <span style="color:var(--text-muted)">Per-ad revenue is 0 because current exports lack Ad ID. Add "Ad ID" column in Meta export or unblock the Meta API token to enable ROAS per ad.</span>' : ''}
     `;
 
     const head = document.getElementById('top-ads-head');
     const body = document.getElementById('top-ads-body');
-    head.innerHTML = ['Ad Name', 'Spend', 'CTR', 'Impressions', 'Days', 'Last Active', 'Status', 'Iterate'].map(h => `<th>${h}</th>`).join('');
+    head.innerHTML = ['Ad Name', 'Spend', 'CTR', 'CPC', 'Impr', 'Calls', 'Revenue', 'ROAS', 'Days', 'Last Active', 'Status', 'Iterate'].map(h => `<th>${h}</th>`).join('');
 
     if (rows.length === 0) {
-      body.innerHTML = `<tr><td colspan="8" style="color:var(--text-muted);padding:12px 0">No ads had spend in the last ${this.LOOKBACK_DAYS} days.</td></tr>`;
+      body.innerHTML = `<tr><td colspan="12" style="color:var(--text-muted);padding:12px 0">No ads in this view.</td></tr>`;
       return;
     }
-    body.innerHTML = rows.slice(0, 10).map(r => {
+    body.innerHTML = rows.map(r => {
       const nameEsc = Performance.esc(r.name);
       const statusColor = (r.lastStatus === 'not_delivering' || r.lastStatus === 'inactive') ? 'var(--text-muted)' : 'var(--success)';
+      const roasColor = r.roas >= 1 ? 'var(--success)' : (r.roas > 0 ? 'var(--warning)' : 'var(--text-muted)');
       return `
         <tr>
           <td><strong>${nameEsc}</strong></td>
           <td>$${r.spend.toFixed(2)}</td>
           <td style="color:${r.ctr >= 3 ? 'var(--success)' : 'var(--text-dim)'};font-weight:${r.ctr >= 3 ? '600' : '400'}">${r.ctr.toFixed(2)}%</td>
+          <td>$${r.cpc.toFixed(2)}</td>
           <td>${Math.round(r.impressions).toLocaleString()}</td>
+          <td>${r.callCount}</td>
+          <td>$${r.revenue.toFixed(2)}</td>
+          <td style="color:${roasColor};font-weight:600">${r.roas.toFixed(2)}x</td>
           <td>${r.days}</td>
           <td style="font-size:11px;color:var(--text-muted)">${r.lastDay || '—'}</td>
           <td style="color:${statusColor};font-size:12px">${Performance.esc(r.lastStatus || 'active')}</td>
           <td>
-            <button class="btn btn-sm btn-outline" onclick="TopAds.iterateStyle('${nameEsc}')" title="Generate new creatives inspired by this winner">Iterate Style</button>
+            <button class="btn btn-sm btn-outline" onclick="TopAds.iterateStyle('${nameEsc}')" title="Generate new creatives inspired by this ad">Iterate Style</button>
           </td>
         </tr>
       `;
