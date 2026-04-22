@@ -259,12 +259,14 @@ tr:hover td { background: var(--bg-card-hover); }
   <!-- Progress Tracker (hidden when no jobs) -->
   <div class="card" id="progressTracker" style="display:none"></div>
 
-  <!-- Meta Ads Performance -->
+  <!-- Ads Performance (Meta + NewsBreak) -->
   <div class="card" id="topAdsCard">
-    <h2><span class="dot" style="background:var(--warning)"></span> Meta Ads Performance</h2>
+    <h2><span class="dot" style="background:var(--warning)"></span> Ads Performance</h2>
     <div class="sheet-tabs" id="metaAdsTabs" style="margin-top:4px;margin-bottom:12px">
-      <button class="sheet-tab active" onclick="TopAds.switchTab('live')">Live (last 14d)</button>
-      <button class="sheet-tab" onclick="TopAds.switchTab('alltime')">All-Time</button>
+      <button class="sheet-tab active" onclick="TopAds.switchTab('meta_live')">Meta — Live (14d)</button>
+      <button class="sheet-tab" onclick="TopAds.switchTab('meta_alltime')">Meta — All-Time</button>
+      <button class="sheet-tab" onclick="TopAds.switchTab('nb')">NewsBreak (30d)</button>
+      <button class="sheet-tab" onclick="TopAds.switchTab('all')">All Channels</button>
     </div>
     <div id="top-ads-meta" style="font-size:12px;color:var(--text-muted);margin-bottom:12px"></div>
     <div class="table-wrap">
@@ -525,15 +527,16 @@ const DataService = {
   },
 
   async fetchAll() {
-    const [scraped, analysis, generated, settings, calls, metaSpend] = await Promise.all([
+    const [scraped, analysis, generated, settings, calls, metaSpend, nbSpend] = await Promise.all([
       this.fetchSheet('Scraped Ads'),
       this.fetchSheet('Analysis'),
       this.fetchSheet('Generated Creatives'),
       this.fetchSheet('Settings'),
       this.fetchSheet('Billable Calls'),
-      this.fetchSheet('Meta Spend')
+      this.fetchSheet('Meta Spend'),
+      this.fetchSheet('NewsBreak Spend')
     ]);
-    this.cache = { scraped, analysis, generated, settings, calls, metaSpend, ts: Date.now() };
+    this.cache = { scraped, analysis, generated, settings, calls, metaSpend, nbSpend, ts: Date.now() };
     return this.cache;
   }
 };
@@ -891,51 +894,71 @@ const Performance = {
 // ============================================================
 const TopAds = {
   LOOKBACK_DAYS: 14,
-  currentTab: 'live',
+  NB_LOOKBACK_DAYS: 30,
+  currentTab: 'meta_live',
   lastData: null,
 
   switchTab(tab) {
     this.currentTab = tab;
     document.querySelectorAll('#metaAdsTabs .sheet-tab').forEach(t => t.classList.remove('active'));
-    const btn = document.querySelector(`#metaAdsTabs .sheet-tab[onclick*="${tab}"]`);
+    const btn = document.querySelector(`#metaAdsTabs .sheet-tab[onclick*="'${tab}'"]`);
     if (btn) btn.classList.add('active');
     if (this.lastData) this.render(this.lastData);
   },
 
   render(data) {
     this.lastData = data;
-    const spendRows = data.metaSpend || [];
+    const metaRows = data.metaSpend || [];
+    const nbRows = data.nbSpend || [];
     const calls = data.calls || [];
     const card = document.getElementById('topAdsCard');
     if (!card) return;
-    if (spendRows.length === 0) { card.style.display = 'none'; return; }
+    if (metaRows.length === 0 && nbRows.length === 0) { card.style.display = 'none'; return; }
     card.style.display = '';
 
     const parseDay = s => { try { return new Date(s).getTime(); } catch (e) { return 0; } };
+    const tab = this.currentTab;
+    const showNB = tab === 'nb' || tab === 'all';
+    const showMeta = tab === 'meta_live' || tab === 'meta_alltime' || tab === 'all';
+    const liveOnly = tab === 'meta_live' || tab === 'nb' || tab === 'all';
+
+    // Find latest timestamp across all included sources (for "live" cutoff)
     let latestTs = 0;
-    for (const r of spendRows) { const t = parseDay(r.day); if (t > latestTs) latestTs = t; }
-    const cutoffTs = latestTs - this.LOOKBACK_DAYS * 86400000;
-    const liveOnly = this.currentTab === 'live';
+    if (showMeta) for (const r of metaRows) { const t = parseDay(r.day); if (t > latestTs) latestTs = t; }
+    if (showNB)   for (const r of nbRows)   { const t = parseDay(r.day); if (t > latestTs) latestTs = t; }
+    const metaCutoff = latestTs - this.LOOKBACK_DAYS * 86400000;
+    const nbCutoff   = latestTs - this.NB_LOOKBACK_DAYS * 86400000;
 
     // Aggregate per ad across the chosen window
     const agg = {};
-    for (const r of spendRows) {
+    const pushRow = (r, platform, windowCutoff) => {
       const ts = parseDay(r.day);
-      if (!ts) continue;
-      if (liveOnly && ts < cutoffTs) continue;
+      if (!ts) return;
+      if (liveOnly && ts < windowCutoff) return;
       const spend = parseFloat(r.spend) || 0;
-      if (liveOnly && spend <= 0) continue; // Live tab: only rows with actual spend
+      if (liveOnly && spend <= 0) return;
       const name = r.ad_name || 'unknown';
-      if (!agg[name]) agg[name] = { name, spend: 0, impressions: 0, linkClicks: 0, ctrSum: 0, ctrDays: 0, days: 0, lastDay: '', lastStatus: '', lastTs: 0 };
-      const a = agg[name];
+      const key = platform + '::' + name;
+      if (!agg[key]) agg[key] = { name, platform, spend:0, impressions:0, clicks:0, ctrSum:0, ctrDays:0, days:0, conversions:0, lastDay:'', lastStatus:'', lastTs:0 };
+      const a = agg[key];
       a.spend += spend;
       a.impressions += parseFloat(r.impressions) || 0;
-      a.linkClicks += parseFloat(r.link_clicks) || 0;
-      const ctr = parseFloat(r.ctr_all) || 0;
-      if (ctr > 0) { a.ctrSum += ctr; a.ctrDays += 1; }
+      if (platform === 'Meta') {
+        a.clicks += parseFloat(r.link_clicks) || 0;
+        const ctr = parseFloat(r.ctr_all) || 0;
+        if (ctr > 0) { a.ctrSum += ctr; a.ctrDays += 1; }
+        if (ts > a.lastTs) { a.lastTs = ts; a.lastDay = r.day || ''; a.lastStatus = r.delivery_status || ''; }
+      } else {
+        a.clicks += parseFloat(r.clicks) || 0;
+        a.conversions += parseFloat(r.conversions) || 0;
+        const ctr = parseFloat(r.ctr) || 0;
+        if (ctr > 0) { a.ctrSum += ctr; a.ctrDays += 1; }
+        if (ts > a.lastTs) { a.lastTs = ts; a.lastDay = r.day || ''; a.lastStatus = 'active'; }
+      }
       a.days += 1;
-      if (ts > a.lastTs) { a.lastTs = ts; a.lastDay = r.day || ''; a.lastStatus = r.delivery_status || ''; }
-    }
+    };
+    if (showMeta) for (const r of metaRows) pushRow(r, 'Meta', metaCutoff);
+    if (showNB)   for (const r of nbRows)   pushRow(r, 'NewsBreak', nbCutoff);
 
     // Attribute calls + revenue to each ad by matching on ad_id OR ad_name in the call's sub fields
     const callsByName = {};
@@ -958,11 +981,9 @@ const TopAds = {
 
     // Compose final rows with ROAS
     const rows = Object.values(agg).map(a => {
-      const ctr = a.ctrDays > 0 ? a.ctrSum / a.ctrDays : 0;
-      // Try to match calls: first exact ad_id (not in CSV yet), then by ad_name substring
+      const ctr = a.impressions > 0 ? (a.clicks / a.impressions * 100) : 0;
       let matched = callsById[a.name];
       if (!matched) {
-        // Partial name match: look for any callsByName key that appears in the ad name
         for (const [k, v] of Object.entries(callsByName)) {
           if (k && a.name.includes(k)) { matched = v; break; }
         }
@@ -970,7 +991,7 @@ const TopAds = {
       const callCount = matched ? matched.count : 0;
       const revenue = matched ? matched.rev : 0;
       const roas = a.spend > 0 ? revenue / a.spend : 0;
-      const cpc = a.linkClicks > 0 ? a.spend / a.linkClicks : 0;
+      const cpc = a.clicks > 0 ? a.spend / a.clicks : 0;
       return { ...a, ctr, callCount, revenue, roas, cpc };
     });
 
@@ -981,50 +1002,57 @@ const TopAds = {
       rows.sort((x, y) => y.spend - x.spend);
     }
 
-    // Meta note
     const note = document.getElementById('top-ads-meta');
     const latestStr = latestTs ? new Date(latestTs).toISOString().slice(0, 10) : 'n/a';
-    const allInactive = liveOnly && rows.length > 0 && rows.every(r => r.lastStatus === 'not_delivering' || r.lastStatus === 'inactive');
     const totalSpend = rows.reduce((s, r) => s + r.spend, 0);
     const totalRev = rows.reduce((s, r) => s + r.revenue, 0);
+    const totalConv = rows.reduce((s, r) => s + (r.conversions || 0), 0);
     const totalRoas = totalSpend > 0 ? totalRev / totalSpend : 0;
-    const windowLabel = liveOnly ? `last ${this.LOOKBACK_DAYS} days through ${latestStr}` : 'all recorded history';
+    const windowLabel = {
+      'meta_live':    `Meta — last ${this.LOOKBACK_DAYS} days through ${latestStr}`,
+      'meta_alltime': `Meta — all recorded history`,
+      'nb':           `NewsBreak — last ${this.NB_LOOKBACK_DAYS} days through ${latestStr}`,
+      'all':          `Meta (${this.LOOKBACK_DAYS}d) + NewsBreak (${this.NB_LOOKBACK_DAYS}d)`
+    }[tab] || '';
+    const convPart = totalConv > 0 ? ` · ${totalConv} platform conversions` : '';
     note.innerHTML = `
-      ${rows.length} ads · Total spend $${totalSpend.toFixed(2)} · Total revenue $${totalRev.toFixed(2)} · ROAS <strong style="color:${totalRoas >= 1 ? 'var(--success)' : 'var(--warning)'}">${totalRoas.toFixed(2)}x</strong> (${windowLabel}).
-      ${allInactive ? ' <span style="color:var(--warning)">All ads show as inactive — pull a fresh Meta export.</span>' : ''}
-      ${rows.every(r => r.revenue === 0) ? ' <span style="color:var(--text-muted)">Per-ad revenue is 0 because current exports lack Ad ID. Add "Ad ID" column in Meta export or unblock the Meta API token to enable ROAS per ad.</span>' : ''}
+      ${rows.length} ads · Total spend $${totalSpend.toFixed(2)} · Total revenue $${totalRev.toFixed(2)}${convPart} · ROAS <strong style="color:${totalRoas >= 1 ? 'var(--success)' : 'var(--warning)'}">${totalRoas.toFixed(2)}x</strong> — ${windowLabel}.
+      ${rows.length > 0 && rows.every(r => r.revenue === 0) ? ' <span style="color:var(--text-muted)">Per-ad revenue is 0 because Meta CSV exports lack Ad ID (add it to the export template) and NewsBreak calls aren\'t yet matched. Unblock the Meta API token + confirm DNI attribution to fix.</span>' : ''}
     `;
 
     const head = document.getElementById('top-ads-head');
     const body = document.getElementById('top-ads-body');
-    head.innerHTML = ['Ad Name', 'Spend', 'CTR', 'CPC', 'Impr', 'Calls', 'Revenue', 'ROAS', 'Days', 'Last Active', 'Status', 'Iterate'].map(h => `<th>${h}</th>`).join('');
+    const showPlatform = tab === 'all';
+    const headerCells = showPlatform
+      ? ['Platform', 'Ad Name', 'Spend', 'CTR', 'CPC', 'Impr', 'Conv', 'Calls', 'Revenue', 'ROAS', 'Days', 'Last Active', 'Iterate']
+      : ['Ad Name', 'Spend', 'CTR', 'CPC', 'Impr', 'Conv', 'Calls', 'Revenue', 'ROAS', 'Days', 'Last Active', 'Status', 'Iterate'];
+    head.innerHTML = headerCells.map(h => `<th>${h}</th>`).join('');
 
     if (rows.length === 0) {
-      body.innerHTML = `<tr><td colspan="12" style="color:var(--text-muted);padding:12px 0">No ads in this view.</td></tr>`;
+      body.innerHTML = `<tr><td colspan="${headerCells.length}" style="color:var(--text-muted);padding:12px 0">No ads in this view.</td></tr>`;
       return;
     }
     body.innerHTML = rows.map(r => {
       const nameEsc = Performance.esc(r.name);
       const statusColor = (r.lastStatus === 'not_delivering' || r.lastStatus === 'inactive') ? 'var(--text-muted)' : 'var(--success)';
       const roasColor = r.roas >= 1 ? 'var(--success)' : (r.roas > 0 ? 'var(--warning)' : 'var(--text-muted)');
-      return `
-        <tr>
-          <td><strong>${nameEsc}</strong></td>
-          <td>$${r.spend.toFixed(2)}</td>
-          <td style="color:${r.ctr >= 3 ? 'var(--success)' : 'var(--text-dim)'};font-weight:${r.ctr >= 3 ? '600' : '400'}">${r.ctr.toFixed(2)}%</td>
-          <td>$${r.cpc.toFixed(2)}</td>
-          <td>${Math.round(r.impressions).toLocaleString()}</td>
-          <td>${r.callCount}</td>
-          <td>$${r.revenue.toFixed(2)}</td>
-          <td style="color:${roasColor};font-weight:600">${r.roas.toFixed(2)}x</td>
-          <td>${r.days}</td>
-          <td style="font-size:11px;color:var(--text-muted)">${r.lastDay || '—'}</td>
-          <td style="color:${statusColor};font-size:12px">${Performance.esc(r.lastStatus || 'active')}</td>
-          <td>
-            <button class="btn btn-sm btn-outline" onclick="TopAds.iterateStyle('${nameEsc}')" title="Generate new creatives inspired by this ad">Iterate Style</button>
-          </td>
-        </tr>
-      `;
+      const platformBadge = r.platform === 'NewsBreak' ? '<span style="display:inline-block;padding:2px 6px;border-radius:3px;background:#7c3aed22;color:#a78bfa;font-size:10px;font-weight:600">NB</span>' : '<span style="display:inline-block;padding:2px 6px;border-radius:3px;background:#3b82f622;color:#60a5fa;font-size:10px;font-weight:600">META</span>';
+      const cells = [];
+      if (showPlatform) cells.push(`<td>${platformBadge}</td>`);
+      cells.push(`<td><strong>${nameEsc}</strong></td>`);
+      cells.push(`<td>$${r.spend.toFixed(2)}</td>`);
+      cells.push(`<td style="color:${r.ctr >= 3 ? 'var(--success)' : 'var(--text-dim)'};font-weight:${r.ctr >= 3 ? '600' : '400'}">${r.ctr.toFixed(2)}%</td>`);
+      cells.push(`<td>$${r.cpc.toFixed(2)}</td>`);
+      cells.push(`<td>${Math.round(r.impressions).toLocaleString()}</td>`);
+      cells.push(`<td>${r.conversions || 0}</td>`);
+      cells.push(`<td>${r.callCount}</td>`);
+      cells.push(`<td>$${r.revenue.toFixed(2)}</td>`);
+      cells.push(`<td style="color:${roasColor};font-weight:600">${r.roas.toFixed(2)}x</td>`);
+      cells.push(`<td>${r.days}</td>`);
+      cells.push(`<td style="font-size:11px;color:var(--text-muted)">${r.lastDay || '—'}</td>`);
+      if (!showPlatform) cells.push(`<td style="color:${statusColor};font-size:12px">${Performance.esc(r.lastStatus || 'active')}</td>`);
+      cells.push(`<td><button class="btn btn-sm btn-outline" onclick="TopAds.iterateStyle('${nameEsc}')" title="Generate new creatives inspired by this ad">Iterate Style</button></td>`);
+      return `<tr>${cells.join('')}</tr>`;
     }).join('');
   },
 
