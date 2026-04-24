@@ -134,6 +134,11 @@ tr:hover td { background: var(--bg-card-hover); }
 .ad-preview { background: #1e2132; border-radius: 8px; padding: 16px; margin-top: 8px; font-size: 13px; line-height: 1.6; max-height: 300px; overflow-y: auto; white-space: pre-wrap; }
 .ad-preview img { max-width: 200px; border-radius: 6px; margin-top: 8px; }
 
+/* View toggle (Grid / List) */
+.view-toggle-btn { background: transparent; border: none; color: var(--text-muted); cursor: pointer; padding: 5px 10px; font-size: 13px; border-radius: 4px; font-family: inherit; transition: all 0.15s; }
+.view-toggle-btn:hover { color: var(--text); background: var(--bg-card); }
+.view-toggle-btn.active { background: var(--accent); color: #fff; }
+
 /* My Ads Gallery */
 .myads-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; padding: 4px; }
 .myads-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; display: flex; flex-direction: column; transition: transform 0.15s, box-shadow 0.15s; }
@@ -289,7 +294,13 @@ tr:hover td { background: var(--bg-card-hover); }
       <button class="sheet-tab" onclick="SheetView.switchTab('generated')">Generated Creatives</button>
       <button class="sheet-tab" onclick="SheetView.switchTab('settings')">Settings</button>
     </div>
-    <div class="table-controls" id="tableFilters"></div>
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+      <div class="table-controls" id="tableFilters" style="flex:1"></div>
+      <div class="view-toggle" id="viewToggle" style="display:none;gap:4px;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:3px">
+        <button class="view-toggle-btn" data-view="grid" onclick="SheetView.setView('grid')" title="Grid view">◻◻</button>
+        <button class="view-toggle-btn" data-view="list" onclick="SheetView.setView('list')" title="List view">☰</button>
+      </div>
+    </div>
     <div class="sheet-search">
       <input type="text" id="sheetSearch" placeholder="Search..." oninput="SheetView.search(this.value)">
     </div>
@@ -1187,11 +1198,34 @@ const SheetView = {
   sortCol: null,
   sortDir: -1,
   filter: 'all',
+  // View preferences per tab, persisted in localStorage
+  VIEW_KEY: 'ai_dashboard_view_pref',
+  viewPref: {},  // { myads: 'grid', scraped: 'list', generated: 'grid' }
+
+  loadViewPref() {
+    try { this.viewPref = JSON.parse(localStorage.getItem(this.VIEW_KEY) || '{}'); } catch(e) { this.viewPref = {}; }
+  },
+  saveViewPref() {
+    localStorage.setItem(this.VIEW_KEY, JSON.stringify(this.viewPref));
+  },
+  setView(view) {
+    this.viewPref[this.currentTab] = view;
+    this.saveViewPref();
+    this.render();
+  },
+  getView() {
+    const cfg = this.tabConfig[this.currentTab];
+    if (!cfg.supportsToggle) return cfg.isGallery ? 'grid' : 'list';
+    return this.viewPref[this.currentTab] || cfg.defaultView || 'list';
+  },
 
   tabConfig: {
     myads: {
       key: 'scraped',  // reuses Scraped Ads data but filters to source=my-ad
       isGallery: true,
+      supportsToggle: true,
+      defaultView: 'grid',
+      filterFn: (r) => (r.source || '') === 'my-ad',
       filters: ['all', 'quiz', 'gmail', 'reddit', 'twitter', 'claude'],
       filterLogic(row, filter) {
         if (filter === 'all') return true;
@@ -1201,6 +1235,8 @@ const SheetView = {
     },
     scraped: {
       key: 'scraped',
+      supportsToggle: true,
+      defaultView: 'list',
       cols: ['page_name', 'headline', 'ad_text', 'media_type', 'is_active', 'days_running', 'impressions_lower', 'start_date', 'scraped_at'],
       display: ['Page', 'Headline', 'Ad Text', 'Type', 'Active', 'Days', 'Impressions', 'Started', 'Scraped'],
       filters: ['all', 'active', 'inactive', 'image', 'video'],
@@ -1226,6 +1262,8 @@ const SheetView = {
     },
     generated: {
       key: 'generated',
+      supportsToggle: true,
+      defaultView: 'grid',
       cols: ['generated_image_url', 'type', 'hook_type', 'headline', 'text_overlay', 'iteration_of', 'created_at'],
       display: ['Preview', 'Type', 'Style/Hook', 'Headline', 'On-Image Text', 'Iteration Of', 'Created'],
       filters: ['all', 'static', 'video', 'draft', 'approved', 'uploaded'],
@@ -1270,10 +1308,10 @@ const SheetView = {
 
   renderGallery(cfg) {
     const allData = DataService.cache[cfg.key] || [];
-    // Only my-ad rows
-    let data = allData.filter(r => (r.source || '') === 'my-ad');
+    // Apply tab-specific pre-filter (e.g. myads narrows to source='my-ad')
+    let data = cfg.filterFn ? allData.filter(cfg.filterFn) : [...allData];
 
-    // Filter tabs (by filename family)
+    // Filter pills
     const filtersEl = document.getElementById('tableFilters');
     if (cfg.filters) {
       filtersEl.innerHTML = cfg.filters.map(f =>
@@ -1282,6 +1320,8 @@ const SheetView = {
       if (this.filter !== 'all' && cfg.filterLogic) {
         data = data.filter(r => cfg.filterLogic(r, this.filter));
       }
+    } else {
+      filtersEl.innerHTML = '';
     }
 
     // Search
@@ -1289,41 +1329,105 @@ const SheetView = {
       data = data.filter(r => Object.values(r).some(v => (v || '').toString().toLowerCase().includes(this.searchQuery)));
     }
 
+    // Sort newest first for generated creatives
+    if (this.currentTab === 'generated') {
+      data = data.slice().reverse();
+    }
+
     const gridEl = document.getElementById('myAdsGrid');
     if (data.length === 0) {
-      gridEl.innerHTML = `<div class="myads-hero">No ads in this filter. Upload winners to the project folder and re-run the uploader, or adjust the filter above.</div>`;
+      gridEl.innerHTML = `<div class="myads-hero">No ads in this view. Adjust the filter or search.</div>`;
       return;
     }
 
-    const hero = `<div class="myads-hero">
-      <strong>${data.length} winning ads</strong> — click <strong>Iterate (vision)</strong> on any card to generate 3 new variations using <code>gpt-image-2</code>. Clean Spanish text, matching style. ~3 min per iteration.
-    </div>`;
+    // Heroes per tab
+    const heroByTab = {
+      myads: `<strong>${data.length} winning ads</strong> — click <strong>Iterate</strong> on any card to generate variations using <code>gpt-image-2</code>. ~3 min per render.`,
+      scraped: `<strong>${data.length} scraped ads</strong> — competitor ads pulled from Foreplay swipefile. Click <strong>Iterate</strong> to generate variations in your campaign's style.`,
+      generated: `<strong>${data.length} generated creatives</strong> — sorted newest first. Click a card to open the full image in Drive, or click <strong>Iterate</strong> to make more variations.`
+    };
+    const hero = `<div class="myads-hero">${heroByTab[this.currentTab] || ''}</div>`;
+
+    const extractDriveId = (url) => {
+      if (!url) return null;
+      const m = url.match(/drive\.google\.com\/file\/d\/([^\/]+)/) ||
+                url.match(/drive\.google\.com\/.*?[?&]id=([^&]+)/) ||
+                url.match(/drive\.google\.com\/thumbnail\?id=([^&]+)/);
+      return m ? m[1] : null;
+    };
 
     const cards = data.map(r => {
-      const adId = Performance.esc(r.ad_id || '');
-      const name = Performance.esc((r.headline || r.ad_text || r.ad_id || '').toString());
-      const fmt = Performance.esc((r.display_format || r.hook_type || '').toString());
-      const driveMatch = (r.image_url || '').match(/drive\.google\.com\/.*?[?&]id=([^&]+)/) || (r.image_url || '').match(/drive\.google\.com\/file\/d\/([^\/]+)/) || (r.image_url || '').match(/drive\.google\.com\/thumbnail\?id=([^&]+)/);
-      const thumbSrc = driveMatch ? `https://drive.google.com/thumbnail?id=${driveMatch[1]}&sz=w512` : (r.image_url || '');
-      const openUrl = driveMatch ? `https://drive.google.com/file/d/${driveMatch[1]}/view` : (r.image_url || '#');
+      // Source-aware field mapping
+      let imgUrl = '';
+      let srcId = '';
+      let name = '';
+      let tag = '';
+      let iterateAction = null;  // { kind: 'scraped'|'creative', id }
+
+      if (this.currentTab === 'generated') {
+        imgUrl = r.generated_image_url || r.video_url || '';
+        srcId = r.creative_id || '';
+        name = (r.headline || r.text_overlay || r.creative_id || '').toString();
+        tag = (r.hook_type || r.type || '').toString();
+        if (srcId) iterateAction = { kind: 'creative', id: srcId };
+      } else {
+        // scraped + myads both use the Scraped Ads schema
+        imgUrl = r.image_url || '';
+        srcId = r.ad_id || '';
+        name = (r.headline || r.ad_text || r.page_name || '').toString();
+        tag = (r.display_format || r.hook_type || r.media_type || '').toString();
+        if (srcId) iterateAction = { kind: 'scraped', id: srcId };
+      }
+
+      const esc = Performance.esc;
+      const driveId = extractDriveId(imgUrl);
+      const thumbSrc = driveId ? `https://drive.google.com/thumbnail?id=${driveId}&sz=w512` : imgUrl;
+      const openUrl = driveId ? `https://drive.google.com/file/d/${driveId}/view` : (imgUrl || '#');
+
+      const actionsHtml = iterateAction
+        ? `<div class="actions">
+             <button class="iter-btn primary" onclick="SheetView.iterateFrom('${iterateAction.kind}','${esc(iterateAction.id)}', 3)">Iterate (3 variations)</button>
+             <button class="iter-btn secondary" onclick="SheetView.iterateFrom('${iterateAction.kind}','${esc(iterateAction.id)}', 1)">Quick test (1)</button>
+           </div>`
+        : '';
+
       return `
         <div class="myads-card">
           <a href="${openUrl}" target="_blank" style="display:block">
-            <img class="thumb" src="${thumbSrc}" alt="${name}" loading="lazy" onerror="this.style.background='var(--border)';this.style.display='flex';this.style.alignItems='center';this.style.justifyContent='center';this.alt='(preview unavailable)'">
+            <img class="thumb" src="${thumbSrc}" alt="${esc(name)}" loading="lazy" onerror="this.style.background='var(--border)';this.style.display='flex';this.style.alignItems='center';this.style.justifyContent='center';this.alt='(preview unavailable)'">
           </a>
           <div class="meta">
-            <div class="name">${name}</div>
-            <div class="tag">${fmt || 'ad'}</div>
+            <div class="name">${esc(name.slice(0, 80))}</div>
+            <div class="tag">${esc(tag || 'ad')}</div>
           </div>
-          <div class="actions">
-            <button class="iter-btn primary" onclick="SheetView.iterateScraped('${adId}', 3)">Iterate (3 variations)</button>
-            <button class="iter-btn secondary" onclick="SheetView.iterateScraped('${adId}', 1)">Quick test (1 variation)</button>
-          </div>
+          ${actionsHtml}
         </div>
       `;
     }).join('');
 
     gridEl.innerHTML = hero + `<div class="myads-grid">${cards}</div>`;
+  },
+
+  iterateFrom(kind, id, iterations) {
+    if (kind === 'scraped') this.iterateScraped(id, iterations);
+    else this.iterateCreative(id, iterations);
+  },
+
+  iterateCreative(creativeId, iterations) {
+    if (!creativeId) { Toast.show('No creative_id', 'error'); return; }
+    const label = `Variations from ${creativeId.slice(-14)}`;
+    ProgressTracker.start({
+      id: `creative_${creativeId}_${Date.now()}`,
+      type: 'creative',
+      creativeId: creativeId,
+      label,
+      expectedSec: ProgressTracker.expectedFor('creative') || 240
+    });
+    const url = `${CONFIG.n8nUrl}/webhook/ad-iterate-creative?creative_id=${encodeURIComponent(creativeId)}&iterations=${iterations}`;
+    fetch(url, { method: 'GET' })
+      .then(r => { if (!r.ok) Toast.show(`Iterate failed: HTTP ${r.status}`, 'error'); setTimeout(() => App.refresh(), 2000); })
+      .catch(e => Toast.show(`Iterate error: ${e.message}`, 'error'));
+    Toast.show(`${label} kicked off…`, 'info');
   },
 
   iterateScraped(adId, iterations) {
@@ -1353,9 +1457,23 @@ const SheetView = {
     const gridEl = document.getElementById('myAdsGrid');
     const tableWrap = document.getElementById('sheetTableWrap');
     const footerEl = document.getElementById('sheetFooter');
+    const toggleEl = document.getElementById('viewToggle');
 
-    // Toggle gallery vs table view
-    if (cfg.isGallery) {
+    // Show / hide the Grid/List toggle depending on tab support
+    if (cfg.supportsToggle) {
+      toggleEl.style.display = 'flex';
+      const view = this.getView();
+      toggleEl.querySelectorAll('.view-toggle-btn').forEach(b => {
+        b.classList.toggle('active', b.dataset.view === view);
+      });
+    } else {
+      toggleEl.style.display = 'none';
+    }
+
+    // Pick grid vs list — gallery-only tabs always use grid; toggleable tabs use the view preference
+    const useGrid = cfg.isGallery || (cfg.supportsToggle && this.getView() === 'grid');
+
+    if (useGrid) {
       gridEl.style.display = '';
       tableWrap.style.display = 'none';
       this.renderGallery(cfg);
@@ -1677,6 +1795,7 @@ const App = {
   refreshTimer: null,
 
   async init() {
+    SheetView.loadViewPref();
     ProgressTracker.init();
     await this.refresh();
     Settings.load();
