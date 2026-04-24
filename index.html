@@ -134,6 +134,22 @@ tr:hover td { background: var(--bg-card-hover); }
 .ad-preview { background: #1e2132; border-radius: 8px; padding: 16px; margin-top: 8px; font-size: 13px; line-height: 1.6; max-height: 300px; overflow-y: auto; white-space: pre-wrap; }
 .ad-preview img { max-width: 200px; border-radius: 6px; margin-top: 8px; }
 
+/* My Ads Gallery */
+.myads-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; padding: 4px; }
+.myads-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; display: flex; flex-direction: column; transition: transform 0.15s, box-shadow 0.15s; }
+.myads-card:hover { transform: translateY(-2px); box-shadow: 0 8px 20px rgba(0,0,0,0.25); border-color: var(--accent); }
+.myads-card .thumb { width: 100%; aspect-ratio: 1/1; object-fit: cover; background: var(--bg); display: block; cursor: pointer; }
+.myads-card .meta { padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; border-top: 1px solid var(--border); }
+.myads-card .meta .name { font-weight: 600; font-size: 12px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.myads-card .meta .tag { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+.myads-card .actions { padding: 8px 12px 12px; display: flex; flex-direction: column; gap: 6px; }
+.myads-card .iter-btn { padding: 7px 10px; font-size: 12px; font-weight: 600; border-radius: 6px; border: none; cursor: pointer; transition: all 0.15s; font-family: inherit; width: 100%; }
+.myads-card .iter-btn.primary { background: var(--accent); color: white; }
+.myads-card .iter-btn.primary:hover { background: var(--accent-dim, #4f46e5); }
+.myads-card .iter-btn.secondary { background: transparent; color: var(--text-dim); border: 1px solid var(--border); }
+.myads-card .iter-btn.secondary:hover { background: var(--bg); color: var(--text); }
+.myads-hero { font-size: 13px; color: var(--text-muted); margin-bottom: 16px; padding: 12px; background: var(--bg); border-radius: 6px; border-left: 3px solid var(--accent); }
+
 /* Progress Tracker */
 .progress-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
 .progress-job { margin-bottom: 12px; }
@@ -324,7 +340,8 @@ tr:hover td { background: var(--bg-card-hover); }
   <!-- Tabbed Data View -->
   <div class="card">
     <div class="sheet-tabs" id="sheetTabs">
-      <button class="sheet-tab active" onclick="SheetView.switchTab('scraped')">Scraped Ads</button>
+      <button class="sheet-tab active" onclick="SheetView.switchTab('myads')">Alivio de Deuda (mine)</button>
+      <button class="sheet-tab" onclick="SheetView.switchTab('scraped')">Scraped Ads</button>
       <button class="sheet-tab" onclick="SheetView.switchTab('analysis')">Analysis</button>
       <button class="sheet-tab" onclick="SheetView.switchTab('generated')">Generated Creatives</button>
       <button class="sheet-tab" onclick="SheetView.switchTab('settings')">Settings</button>
@@ -333,6 +350,7 @@ tr:hover td { background: var(--bg-card-hover); }
     <div class="sheet-search">
       <input type="text" id="sheetSearch" placeholder="Search..." oninput="SheetView.search(this.value)">
     </div>
+    <div id="myAdsGrid" style="display:none"></div>
     <div class="table-wrap" id="sheetTableWrap">
       <table id="sheetTable">
         <thead id="sheetHead"></thead>
@@ -1253,13 +1271,23 @@ const ProgressTracker = {
 };
 
 const SheetView = {
-  currentTab: 'scraped',
+  currentTab: 'myads',
   searchQuery: '',
   sortCol: null,
   sortDir: -1,
   filter: 'all',
 
   tabConfig: {
+    myads: {
+      key: 'scraped',  // reuses Scraped Ads data but filters to source=my-ad
+      isGallery: true,
+      filters: ['all', 'quiz', 'gmail', 'reddit', 'twitter', 'claude'],
+      filterLogic(row, filter) {
+        if (filter === 'all') return true;
+        const name = (row['headline'] || row['ad_text'] || '').toLowerCase();
+        return name.includes(filter);
+      }
+    },
     scraped: {
       key: 'scraped',
       cols: ['page_name', 'headline', 'ad_text', 'media_type', 'is_active', 'days_running', 'impressions_lower', 'start_date', 'scraped_at'],
@@ -1329,6 +1357,64 @@ const SheetView = {
     this.render();
   },
 
+  renderGallery(cfg) {
+    const allData = DataService.cache[cfg.key] || [];
+    // Only my-ad rows
+    let data = allData.filter(r => (r.source || '') === 'my-ad');
+
+    // Filter tabs (by filename family)
+    const filtersEl = document.getElementById('tableFilters');
+    if (cfg.filters) {
+      filtersEl.innerHTML = cfg.filters.map(f =>
+        `<button class="filter-btn ${this.filter === f ? 'active' : ''}" onclick="SheetView.setFilter('${f}')">${f === 'all' ? 'All' : f.charAt(0).toUpperCase() + f.slice(1)}</button>`
+      ).join('');
+      if (this.filter !== 'all' && cfg.filterLogic) {
+        data = data.filter(r => cfg.filterLogic(r, this.filter));
+      }
+    }
+
+    // Search
+    if (this.searchQuery) {
+      data = data.filter(r => Object.values(r).some(v => (v || '').toString().toLowerCase().includes(this.searchQuery)));
+    }
+
+    const gridEl = document.getElementById('myAdsGrid');
+    if (data.length === 0) {
+      gridEl.innerHTML = `<div class="myads-hero">No ads in this filter. Upload winners to the project folder and re-run the uploader, or adjust the filter above.</div>`;
+      return;
+    }
+
+    const hero = `<div class="myads-hero">
+      <strong>${data.length} winning ads</strong> — click <strong>Iterate (vision)</strong> on any card to generate 3 new variations using <code>gpt-image-2</code>. Clean Spanish text, matching style. ~3 min per iteration.
+    </div>`;
+
+    const cards = data.map(r => {
+      const adId = Performance.esc(r.ad_id || '');
+      const name = Performance.esc((r.headline || r.ad_text || r.ad_id || '').toString());
+      const fmt = Performance.esc((r.display_format || r.hook_type || '').toString());
+      const driveMatch = (r.image_url || '').match(/drive\.google\.com\/.*?[?&]id=([^&]+)/) || (r.image_url || '').match(/drive\.google\.com\/file\/d\/([^\/]+)/) || (r.image_url || '').match(/drive\.google\.com\/thumbnail\?id=([^&]+)/);
+      const thumbSrc = driveMatch ? `https://drive.google.com/thumbnail?id=${driveMatch[1]}&sz=w512` : (r.image_url || '');
+      const openUrl = driveMatch ? `https://drive.google.com/file/d/${driveMatch[1]}/view` : (r.image_url || '#');
+      return `
+        <div class="myads-card">
+          <a href="${openUrl}" target="_blank" style="display:block">
+            <img class="thumb" src="${thumbSrc}" alt="${name}" loading="lazy" onerror="this.style.background='var(--border)';this.style.display='flex';this.style.alignItems='center';this.style.justifyContent='center';this.alt='(preview unavailable)'">
+          </a>
+          <div class="meta">
+            <div class="name">${name}</div>
+            <div class="tag">${fmt || 'ad'}</div>
+          </div>
+          <div class="actions">
+            <button class="iter-btn primary" onclick="SheetView.iterateScraped('${adId}', 3)">Iterate (3 variations)</button>
+            <button class="iter-btn secondary" onclick="SheetView.iterateScraped('${adId}', 1)">Quick test (1 variation)</button>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    gridEl.innerHTML = hero + `<div class="myads-grid">${cards}</div>`;
+  },
+
   iterateScraped(adId, iterations) {
     if (!adId) { Toast.show('No ad_id', 'error'); return; }
     const label = `Variations from scraped ${adId.slice(-10)}`;
@@ -1353,6 +1439,22 @@ const SheetView = {
 
   render() {
     const cfg = this.tabConfig[this.currentTab];
+    const gridEl = document.getElementById('myAdsGrid');
+    const tableWrap = document.getElementById('sheetTableWrap');
+    const footerEl = document.getElementById('sheetFooter');
+
+    // Toggle gallery vs table view
+    if (cfg.isGallery) {
+      gridEl.style.display = '';
+      tableWrap.style.display = 'none';
+      this.renderGallery(cfg);
+      if (footerEl) footerEl.innerHTML = '';
+      return;
+    } else {
+      gridEl.style.display = 'none';
+      tableWrap.style.display = '';
+    }
+
     const allData = DataService.cache[cfg.key] || [];
     let data = [...allData];
 
