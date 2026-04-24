@@ -884,7 +884,7 @@ const Performance = {
   iterate(type, creativeId, iterations) {
     if (!creativeId) { Toast.show('No creative_id to iterate', 'error'); return; }
     const cfg = {
-      creative: { endpoint: 'ad-iterate-creative', label: 'New images', defaultSec: 55,  qs: `&iterations=${iterations}` },
+      creative: { endpoint: 'ad-iterate-creative', label: 'New images', defaultSec: 240, qs: `&iterations=${iterations}` },
       copy:     { endpoint: 'ad-iterate-copy',     label: 'New copy',   defaultSec: 25,  qs: `&iterations=${iterations}` },
       video:    { endpoint: 'ad-iterate-video',    label: 'New video',  defaultSec: 660, qs: '&video_format=ugc' }
     }[type];
@@ -1120,10 +1120,13 @@ const ProgressTracker = {
     this.jobs = this.jobs.filter(j => j.startedAt > cutoff);
     try { this.history = JSON.parse(localStorage.getItem(this.HISTORY_KEY) || '{"creative":[],"copy":[],"video":[]}'); }
     catch (e) { this.history = { creative: [], copy: [], video: [] }; }
-    // Seed with real historical durations (from n8n executions) on first load — baseline for adaptive bar
-    if ((this.history.creative || []).length === 0) this.history.creative = [52, 54, 49, 49];
+    // Seed with real historical durations (post-gpt-image-2 swap; creative pipeline is slower now)
+    if ((this.history.creative || []).length === 0) this.history.creative = [188, 181, 195];
     if ((this.history.copy     || []).length === 0) this.history.copy     = [22];
     if ((this.history.video    || []).length === 0) this.history.video    = [624, 867, 492];
+    // If existing history has pre-swap fast values, reset it so new runs use realistic baseline
+    const creativeMedian = this.history.creative && this.history.creative.length ? [...this.history.creative].sort((a,b)=>a-b)[Math.floor(this.history.creative.length/2)] : 0;
+    if (creativeMedian > 0 && creativeMedian < 120) this.history.creative = [188, 181, 195];
     this.save();
   },
   save() {
@@ -1191,8 +1194,9 @@ const ProgressTracker = {
         this.recordCompletion(job.type, durationSec);
         anyUpdate = true;
         Toast.show(`${job.label} done for ${job.creativeId.slice(-20)} (${matches.length} new, ${this.fmtTime(durationSec)})`, 'success');
-      } else if (now - job.startedAt > job.expectedSec * 2500) {
-        // 2.5x expected time = consider timed out
+      } else if (now - job.startedAt > Math.max(job.expectedSec * 1000 * 3, 600000)) {
+        // Timeout = max(3× expected, 10 minutes). Prevents false timeouts when
+        // the backend is just slow (gpt-image-2 can take 3-5 min per image).
         job.status = 'timeout';
         job.finishedAt = now;
         anyUpdate = true;
