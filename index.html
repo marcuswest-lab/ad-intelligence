@@ -153,6 +153,8 @@ tr:hover td { background: var(--bg-card-hover); }
 .myads-card .iter-btn.primary:hover { background: var(--accent-dim, #4f46e5); }
 .myads-card .iter-btn.secondary { background: transparent; color: var(--text-dim); border: 1px solid var(--border); }
 .myads-card .iter-btn.secondary:hover { background: var(--bg); color: var(--text); }
+.myads-card .iter-btn.danger { background: transparent; color: #ef4444; border: 1px solid rgba(239,68,68,0.3); }
+.myads-card .iter-btn.danger:hover { background: rgba(239,68,68,0.12); color: #fca5a5; border-color: #ef4444; }
 .myads-hero { font-size: 13px; color: var(--text-muted); margin-bottom: 16px; padding: 12px; background: var(--bg); border-radius: 6px; border-left: 3px solid var(--accent); }
 
 /* Progress Tracker */
@@ -1413,12 +1415,15 @@ const SheetView = {
       const thumbSrc = driveId ? `https://drive.google.com/thumbnail?id=${driveId}&sz=w512` : imgUrl;
       const openUrl = driveId ? `https://drive.google.com/file/d/${driveId}/view` : (imgUrl || '#');
 
+      // Delete is only available on Generated Creatives (user's own renders that live in Drive + Sheet)
+      const canDelete = this.currentTab === 'generated' && srcId;
       const actionsHtml = iterateAction
         ? `<div class="actions">
              <button class="iter-btn primary" onclick="SheetView.iterateFrom('${iterateAction.kind}','${esc(iterateAction.id)}', 3)">Iterate (3 variations)</button>
              <button class="iter-btn secondary" onclick="SheetView.iterateFrom('${iterateAction.kind}','${esc(iterateAction.id)}', 1)">Quick test (1)</button>
+             ${canDelete ? `<button class="iter-btn danger" onclick="SheetView.deleteCreative('${esc(srcId)}')">Delete</button>` : ''}
            </div>`
-        : '';
+        : (canDelete ? `<div class="actions"><button class="iter-btn danger" onclick="SheetView.deleteCreative('${esc(srcId)}')">Delete</button></div>` : '');
 
       return `
         <div class="myads-card">
@@ -1440,6 +1445,32 @@ const SheetView = {
   iterateFrom(kind, id, iterations) {
     if (kind === 'scraped') this.iterateScraped(id, iterations);
     else this.iterateCreative(id, iterations);
+  },
+
+  deleteCreative(creativeId) {
+    if (!creativeId) { Toast.show('No creative_id', 'error'); return; }
+    Modal.show(
+      'Delete creative?',
+      `This will permanently remove ${creativeId} from the Generated Creatives sheet AND from Drive. Cannot be undone.`,
+      () => {
+        Toast.show(`Deleting ${creativeId.slice(-20)}…`, 'info');
+        fetch(`${CONFIG.n8nUrl}/webhook/marketcall-sales-log`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ _magic: 'DELETE_CREATIVE', creative_id: creativeId })
+        })
+          .then(r => r.json().catch(() => ({})))
+          .then(j => {
+            if (j && j.deleted) {
+              Toast.show(`Deleted ${creativeId.slice(-20)}`, 'success');
+              setTimeout(() => App.refresh(), 1500);
+            } else {
+              Toast.show(`Delete returned: ${JSON.stringify(j).slice(0, 100)}`, 'error');
+            }
+          })
+          .catch(e => Toast.show(`Delete error: ${e.message}`, 'error'));
+      }
+    );
   },
 
   iterateCreative(creativeId, iterations) {
