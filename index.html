@@ -1295,8 +1295,8 @@ const SheetView = {
       key: 'generated',
       supportsToggle: true,
       defaultView: 'grid',
-      cols: ['generated_image_url', 'type', 'hook_type', 'headline', 'text_overlay', 'iteration_of', 'created_at'],
-      display: ['Preview', 'Type', 'Style/Hook', 'Headline', 'On-Image Text', 'Iteration Of', 'Created'],
+      cols: ['generated_image_url', 'display_name', 'type', 'hook_type', 'headline', 'text_overlay', 'iteration_of', 'created_at'],
+      display: ['Preview', 'Name', 'Type', 'Style/Hook', 'Headline', 'On-Image Text', 'Iteration Of', 'Created'],
       filters: ['all', 'static', 'video', 'draft', 'approved', 'uploaded'],
       filterLogic(row, filter) {
         if (filter === 'static' || filter === 'video') return (row['type'] || '').toLowerCase() === filter;
@@ -1398,7 +1398,8 @@ const SheetView = {
       if (this.currentTab === 'generated') {
         imgUrl = r.generated_image_url || r.video_url || '';
         srcId = r.creative_id || '';
-        name = (r.headline || r.text_overlay || r.creative_id || '').toString();
+        // Prefer the new human-readable display_name; fall back to headline/text_overlay/id
+        name = (r.display_name || r.headline || r.text_overlay || r.creative_id || '').toString();
         tag = (r.hook_type || r.type || '').toString();
         if (srcId) iterateAction = { kind: 'creative', id: srcId };
       } else {
