@@ -865,7 +865,8 @@ const TopAds = {
     const metaCutoff = latestTs - this.LOOKBACK_DAYS * 86400000;
     const nbCutoff   = latestTs - this.NB_LOOKBACK_DAYS * 86400000;
 
-    // Aggregate per ad across the chosen window
+    // Aggregate per ad across the chosen window. Key by (platform::ad_id) when we have a numeric id,
+    // otherwise fall back to (platform::ad_name) so older Meta CSV rows still bucket together.
     const agg = {};
     const pushRow = (r, platform, windowCutoff) => {
       const ts = parseDay(r.day);
@@ -874,9 +875,12 @@ const TopAds = {
       const spend = parseFloat(r.spend) || 0;
       if (liveOnly && spend <= 0) return;
       const name = r.ad_name || 'unknown';
-      const key = platform + '::' + name;
-      if (!agg[key]) agg[key] = { name, platform, spend:0, impressions:0, clicks:0, ctrSum:0, ctrDays:0, days:0, conversions:0, lastDay:'', lastStatus:'', lastTs:0 };
+      const adId = (r.ad_id || '').toString().trim();
+      const key = platform + '::' + (adId || 'name:' + name);
+      if (!agg[key]) agg[key] = { name, platform, ad_id: adId, spend:0, impressions:0, clicks:0, ctrSum:0, ctrDays:0, days:0, conversions:0, lastDay:'', lastStatus:'', lastTs:0 };
       const a = agg[key];
+      // Backfill ad_id if we see it later for this name
+      if (adId && !a.ad_id) a.ad_id = adId;
       a.spend += spend;
       a.impressions += parseFloat(r.impressions) || 0;
       if (platform === 'Meta') {
@@ -896,39 +900,52 @@ const TopAds = {
     if (showMeta) for (const r of metaRows) pushRow(r, 'Meta', metaCutoff);
     if (showNB)   for (const r of nbRows)   pushRow(r, 'NewsBreak', nbCutoff);
 
-    // Attribute calls + revenue to each ad by matching on ad_id OR ad_name in the call's sub fields
-    const callsByName = {};
+    // Attribute calls + revenue. Three matching strategies in priority order:
+    //   1. Exact ad_id match (most reliable — works once DNI carries ad_id through)
+    //   2. ad_name substring match on sub5_utm_content or sub4_utm_campaign
+    //   3. None (ad has 0 calls)
     const callsById = {};
+    const callsByNameHint = {};
     for (const c of calls) {
       const rev = parseFloat(c.payout) || 0;
-      if (c.ad_id) {
-        if (!callsById[c.ad_id]) callsById[c.ad_id] = { count: 0, rev: 0 };
-        callsById[c.ad_id].count += 1;
-        callsById[c.ad_id].rev += rev;
+      const cnt = 1;
+      const cid = (c.ad_id || '').toString().trim();
+      if (cid) {
+        if (!callsById[cid]) callsById[cid] = { count: 0, rev: 0 };
+        callsById[cid].count += cnt;
+        callsById[cid].rev += rev;
       }
-      // Fallback: match on sub4_utm_campaign / sub5_utm_content substrings against the ad name
-      const nameHint = (c.sub5_utm_content || c.sub4_utm_campaign || '').trim();
-      if (nameHint) {
-        if (!callsByName[nameHint]) callsByName[nameHint] = { count: 0, rev: 0 };
-        callsByName[nameHint].count += 1;
-        callsByName[nameHint].rev += rev;
+      const hint = (c.sub5_utm_content || c.sub4_utm_campaign || '').toString().trim();
+      if (hint) {
+        if (!callsByNameHint[hint]) callsByNameHint[hint] = { count: 0, rev: 0 };
+        callsByNameHint[hint].count += cnt;
+        callsByNameHint[hint].rev += rev;
       }
     }
 
-    // Compose final rows with ROAS
+    // Compose final rows with ROAS + tag how each match was derived
     const rows = Object.values(agg).map(a => {
       const ctr = a.impressions > 0 ? (a.clicks / a.impressions * 100) : 0;
-      let matched = callsById[a.name];
-      if (!matched) {
-        for (const [k, v] of Object.entries(callsByName)) {
-          if (k && a.name.includes(k)) { matched = v; break; }
+      let matched = null;
+      let matchMethod = 'none';
+      if (a.ad_id && callsById[a.ad_id]) {
+        matched = callsById[a.ad_id];
+        matchMethod = 'ad_id';
+      } else {
+        for (const [k, v] of Object.entries(callsByNameHint)) {
+          if (k && a.name && a.name.includes(k)) {
+            matched = v;
+            matchMethod = 'name';
+            break;
+          }
         }
       }
       const callCount = matched ? matched.count : 0;
       const revenue = matched ? matched.rev : 0;
       const roas = a.spend > 0 ? revenue / a.spend : 0;
       const cpc = a.clicks > 0 ? a.spend / a.clicks : 0;
-      return { ...a, ctr, callCount, revenue, roas, cpc };
+      const cpa = callCount > 0 ? a.spend / callCount : 0;
+      return { ...a, ctr, callCount, revenue, roas, cpc, cpa, matchMethod };
     });
 
     // Sort: Live tab by composite winner-score; All-Time by total spend
@@ -960,8 +977,8 @@ const TopAds = {
     const body = document.getElementById('top-ads-body');
     const showPlatform = tab === 'all';
     const headerCells = showPlatform
-      ? ['Platform', 'Ad Name', 'Spend', 'CTR', 'CPC', 'Impr', 'Conv', 'Calls', 'Revenue', 'ROAS', 'Days', 'Last Active', 'Iterate']
-      : ['Ad Name', 'Spend', 'CTR', 'CPC', 'Impr', 'Conv', 'Calls', 'Revenue', 'ROAS', 'Days', 'Last Active', 'Status', 'Iterate'];
+      ? ['Platform', 'Ad Name', 'Spend', 'CTR', 'CPC', 'Impr', 'Conv', 'Calls', 'CPA', 'Revenue', 'ROAS', 'Days', 'Last Active', 'Iterate']
+      : ['Ad Name', 'Spend', 'CTR', 'CPC', 'Impr', 'Conv', 'Calls', 'CPA', 'Revenue', 'ROAS', 'Days', 'Last Active', 'Status', 'Iterate'];
     head.innerHTML = headerCells.map(h => `<th>${h}</th>`).join('');
 
     if (rows.length === 0) {
@@ -973,15 +990,22 @@ const TopAds = {
       const statusColor = (r.lastStatus === 'not_delivering' || r.lastStatus === 'inactive') ? 'var(--text-muted)' : 'var(--success)';
       const roasColor = r.roas >= 1 ? 'var(--success)' : (r.roas > 0 ? 'var(--warning)' : 'var(--text-muted)');
       const platformBadge = r.platform === 'NewsBreak' ? '<span style="display:inline-block;padding:2px 6px;border-radius:3px;background:#7c3aed22;color:#a78bfa;font-size:10px;font-weight:600">NB</span>' : '<span style="display:inline-block;padding:2px 6px;border-radius:3px;background:#3b82f622;color:#60a5fa;font-size:10px;font-weight:600">META</span>';
+      // Match-method indicator: green dot = real ad_id attribution, yellow = name match, gray = no calls
+      const matchDot = r.matchMethod === 'ad_id'
+        ? '<span title="Matched by ad_id (exact)" style="color:var(--success);margin-right:4px">●</span>'
+        : r.matchMethod === 'name'
+          ? '<span title="Matched by ad_name (fuzzy)" style="color:var(--warning);margin-right:4px">●</span>'
+          : '';
       const cells = [];
       if (showPlatform) cells.push(`<td>${platformBadge}</td>`);
-      cells.push(`<td><strong>${nameEsc}</strong></td>`);
+      cells.push(`<td><strong>${nameEsc}</strong>${r.ad_id ? `<div style="font-family:monospace;font-size:10px;color:var(--text-muted)">${Performance.esc(r.ad_id)}</div>` : ''}</td>`);
       cells.push(`<td>$${r.spend.toFixed(2)}</td>`);
       cells.push(`<td style="color:${r.ctr >= 3 ? 'var(--success)' : 'var(--text-dim)'};font-weight:${r.ctr >= 3 ? '600' : '400'}">${r.ctr.toFixed(2)}%</td>`);
       cells.push(`<td>$${r.cpc.toFixed(2)}</td>`);
       cells.push(`<td>${Math.round(r.impressions).toLocaleString()}</td>`);
       cells.push(`<td>${r.conversions || 0}</td>`);
-      cells.push(`<td>${r.callCount}</td>`);
+      cells.push(`<td>${matchDot}${r.callCount}</td>`);
+      cells.push(`<td>${r.cpa > 0 ? '$' + r.cpa.toFixed(2) : '—'}</td>`);
       cells.push(`<td>$${r.revenue.toFixed(2)}</td>`);
       cells.push(`<td style="color:${roasColor};font-weight:600">${r.roas.toFixed(2)}x</td>`);
       cells.push(`<td>${r.days}</td>`);
