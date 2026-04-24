@@ -1222,16 +1222,21 @@ const SheetView = {
   tabConfig: {
     myads: {
       key: 'scraped',  // reuses Scraped Ads data but filters to source=my-ad
-      isGallery: true,
       supportsToggle: true,
       defaultView: 'grid',
+      // List-view columns (same schema as scraped tab, tailored for Marcus's own ads)
+      cols: ['image_url', 'headline', 'display_format', 'hook_type', 'scraped_at'],
+      display: ['Preview', 'Ad Name', 'Format', 'Hook', 'Added'],
       filterFn: (r) => (r.source || '') === 'my-ad',
       filters: ['all', 'quiz', 'gmail', 'reddit', 'twitter', 'claude'],
       filterLogic(row, filter) {
         if (filter === 'all') return true;
         const name = (row['headline'] || row['ad_text'] || '').toLowerCase();
         return name.includes(filter);
-      }
+      },
+      defaultSort: 'scraped_at',
+      expandable: true,
+      expandCols: ['image_url', 'ad_text']
     },
     scraped: {
       key: 'scraped',
@@ -1485,7 +1490,8 @@ const SheetView = {
     }
 
     const allData = DataService.cache[cfg.key] || [];
-    let data = [...allData];
+    // Apply tab-specific pre-filter (e.g. my-ads narrows to source='my-ad') for list view too
+    let data = cfg.filterFn ? allData.filter(cfg.filterFn) : [...allData];
 
     // Filters
     const filtersEl = document.getElementById('tableFilters');
