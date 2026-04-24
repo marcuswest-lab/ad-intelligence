@@ -305,7 +305,11 @@ tr:hover td { background: var(--bg-card-hover); }
 
   <!-- Settings & Configuration -->
   <div class="card" id="settingsPanel">
-    <h2><span class="dot" style="background:var(--success)"></span> Settings & Configuration</h2>
+    <h2 onclick="toggleSettings()" style="cursor:pointer;user-select:none;display:flex;align-items:center;justify-content:space-between">
+      <span><span class="dot" style="background:var(--success)"></span> Settings &amp; Configuration</span>
+      <span id="settingsToggleIcon" style="font-size:14px;color:var(--text-muted);font-weight:400">▸ click to expand</span>
+    </h2>
+    <div id="settingsBody" style="display:none">
 
     <div class="setting-group">
       <h3>Scraper Settings</h3>
@@ -403,6 +407,8 @@ tr:hover td { background: var(--bg-card-hover); }
         </div>
       </div>
     </div>
+
+    </div><!-- /settingsBody -->
   </div>
 </div>
 
@@ -565,14 +571,9 @@ const Metrics = {
 // UI RENDERERS
 // ============================================================
 function renderMetrics(m) {
-  document.getElementById('m-scraped').textContent = m.totalScraped;
-  document.getElementById('m-scraped-sub').textContent = `${m.activeCount} active`;
-  document.getElementById('m-longevity').textContent = m.avgDays;
-  document.getElementById('m-longevity-sub').textContent = `longest: ${m.maxDays} days`;
-  document.getElementById('m-hormozi').textContent = m.topScore;
-  document.getElementById('m-hormozi-sub').textContent = m.topScoreAd;
-  document.getElementById('m-generated').textContent = m.totalGenerated;
-  document.getElementById('m-generated-sub').textContent = `${m.staticCount} static, ${m.videoCount} video`;
+  // Top hero tiles now reflect the campaign stats (Billable Calls / Revenue / Spend / ROAS)
+  // and are populated by Performance.render(). This function is intentionally a no-op now;
+  // kept so App.refresh() doesn't break if anything still calls it.
 }
 
 function renderPipeline(m) {
@@ -1700,6 +1701,15 @@ const App = {
     }
   }
 };
+
+function toggleSettings() {
+  const body = document.getElementById('settingsBody');
+  const icon = document.getElementById('settingsToggleIcon');
+  if (!body) return;
+  const collapsed = body.style.display === 'none';
+  body.style.display = collapsed ? '' : 'none';
+  if (icon) icon.textContent = collapsed ? '▾ click to collapse' : '▸ click to expand';
+}
 
 document.addEventListener('DOMContentLoaded', () => App.init());
 </script>
