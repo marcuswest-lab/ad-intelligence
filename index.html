@@ -439,6 +439,76 @@ tbody tr.selected { background: rgba(99,102,241,0.08); }
       </div>
     </div>
 
+    <div class="setting-group">
+      <h3>Launch Presets</h3>
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px">
+        Save reusable launch configurations. Pick one in the launcher dropdown to auto-fill ad set, link, CTA, UTMs, headlines, and bodies. Saved to this browser.
+      </div>
+
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
+        <select id="preset-select" onchange="LaunchPresets.loadIntoEditor(this.value)" style="flex:1;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:6px;font-size:13px">
+          <option value="">— Select a preset to edit —</option>
+        </select>
+        <button type="button" class="btn btn-sm btn-outline" onclick="LaunchPresets.newPreset()">+ New</button>
+        <button type="button" class="btn btn-sm btn-outline" onclick="LaunchPresets.duplicate()">Duplicate</button>
+        <button type="button" class="btn btn-sm btn-outline" onclick="LaunchPresets.deleteCurrent()" style="color:var(--danger);border-color:var(--danger)">Delete</button>
+      </div>
+
+      <div class="setting-row" style="flex-direction:column;align-items:stretch;gap:6px">
+        <label style="font-weight:600">Preset Name</label>
+        <input type="text" id="preset-name" placeholder="e.g. Quiz angle — Spanish" style="width:100%">
+      </div>
+
+      <div class="setting-row" style="flex-direction:column;align-items:stretch;gap:6px;margin-top:12px">
+        <label style="font-weight:600">Ad Set ID</label>
+        <input type="text" id="preset-adset-id" placeholder="e.g. 120243765490300763" style="width:100%">
+        <span style="font-size:11px;color:var(--text-muted)">Auto-selected in the launcher dropdown if still active</span>
+      </div>
+
+      <div class="setting-row" style="flex-direction:column;align-items:stretch;gap:6px;margin-top:12px">
+        <label style="font-weight:600">Landing Page URL</label>
+        <input type="text" id="preset-link" placeholder="https://aliviodedeuda.com/lp-1" style="width:100%">
+      </div>
+
+      <div class="setting-row" style="flex-direction:column;align-items:stretch;gap:6px;margin-top:12px">
+        <label style="font-weight:600">Call to Action</label>
+        <select id="preset-cta" style="width:100%">
+          <option value="LEARN_MORE">Learn More</option>
+          <option value="GET_QUOTE">Get Quote</option>
+          <option value="APPLY_NOW">Apply Now</option>
+          <option value="SIGN_UP">Sign Up</option>
+          <option value="CONTACT_US">Contact Us</option>
+          <option value="GET_OFFER">Get Offer</option>
+          <option value="SUBSCRIBE">Subscribe</option>
+        </select>
+      </div>
+
+      <div class="setting-row" style="flex-direction:column;align-items:stretch;gap:6px;margin-top:12px">
+        <label style="font-weight:600">UTM Template</label>
+        <textarea id="preset-utm" style="width:100%;min-height:60px;font-family:monospace;font-size:11px" placeholder="utm_medium=facebook&utm_campaign={{campaign.name}}&..."></textarea>
+        <span style="font-size:11px;color:var(--text-muted)">Meta substitutes <code style="font-size:10px">{{macros}}</code> at delivery</span>
+      </div>
+
+      <div class="setting-row" style="flex-direction:column;align-items:stretch;gap:6px;margin-top:12px">
+        <label style="font-weight:600">Headlines (one per line, max 5)</label>
+        <textarea id="preset-headlines" style="width:100%;min-height:80px" placeholder="Optional — leave blank to use each creative's own headline"></textarea>
+      </div>
+
+      <div class="setting-row" style="flex-direction:column;align-items:stretch;gap:6px;margin-top:12px">
+        <label style="font-weight:600">Primary Text / Bodies (separate with --- on its own line, max 5)</label>
+        <textarea id="preset-bodies" style="width:100%;min-height:120px" placeholder="Optional — leave blank to use each creative's own body. Separate variations with a line containing only ---"></textarea>
+      </div>
+
+      <div style="display:flex;gap:8px;margin-top:14px;align-items:center">
+        <button type="button" class="btn btn-sm btn-accent" onclick="LaunchPresets.savePreset()">Save Preset</button>
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;margin:0">
+          <input type="checkbox" id="preset-default" style="width:auto;margin:0">
+          Make this the default preset (auto-applies to every launch)
+        </label>
+        <span id="preset-status" style="margin-left:8px;font-size:12px;color:var(--success)"></span>
+      </div>
+    </div>
+
     <div class="save-bar">
       <button class="btn btn-accent" onclick="Settings.save()">Save Settings</button>
       <span class="save-status" id="saveStatus"></span>
@@ -517,6 +587,9 @@ tbody tr.selected { background: rgba(99,102,241,0.08); }
       </div>
     </div>
 
+    <label>Preset (auto-fill all fields)</label>
+    <select id="launchPreset" onchange="MetaLauncher.applyPreset(this.value)"><option value="">— No preset —</option></select>
+
     <label>Target Ad Set</label>
     <select id="launchAdset"><option>Loading…</option></select>
 
@@ -548,9 +621,12 @@ tbody tr.selected { background: rgba(99,102,241,0.08); }
       <option value="SUBSCRIBE">Subscribe</option>
     </select>
 
-    <div style="display:flex;gap:8px;margin-top:20px;justify-content:flex-end">
-      <button class="btn btn-outline" onclick="MetaLauncher.close()">Cancel</button>
-      <button class="btn btn-accent" id="launchSubmit" onclick="MetaLauncher.submit()" style="background:#1877f2;border-color:#1877f2">Launch as PAUSED</button>
+    <div style="display:flex;gap:8px;margin-top:20px;justify-content:space-between;align-items:center">
+      <button class="btn btn-sm btn-outline" onclick="LaunchPresets.saveFromModal('single')" title="Save current modal values as defaults" style="font-size:11px">★ Save as preset</button>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-outline" onclick="MetaLauncher.close()">Cancel</button>
+        <button class="btn btn-accent" id="launchSubmit" onclick="MetaLauncher.submit()" style="background:#1877f2;border-color:#1877f2">Launch as PAUSED</button>
+      </div>
     </div>
 
     <div id="launchStatus" style="margin-top:12px;font-size:12px;color:var(--text-muted)"></div>
@@ -562,6 +638,9 @@ tbody tr.selected { background: rgba(99,102,241,0.08); }
   <div class="launch-modal">
     <h3>↗ Bulk Launch to Meta as PAUSED</h3>
     <div id="bulkLaunchSummary" style="font-size:13px;color:var(--text-dim);margin-bottom:6px"></div>
+
+    <label>Preset (auto-fill all fields)</label>
+    <select id="bulkLaunchPreset" onchange="MetaLauncher.applyPreset(this.value, 'bulk')"><option value="">— No preset —</option></select>
 
     <label>Target Ad Set (all creatives go to this ad set)</label>
     <select id="bulkLaunchAdset"><option>Loading…</option></select>
@@ -601,9 +680,12 @@ tbody tr.selected { background: rgba(99,102,241,0.08); }
       All ads land in the selected ad set as PAUSED. Standard Enhancements + multi-advertiser ads are auto-disabled.
     </div>
 
-    <div style="display:flex;gap:8px;margin-top:18px;justify-content:flex-end">
-      <button class="btn btn-outline" onclick="MetaLauncher.closeBulk()">Cancel</button>
-      <button class="btn btn-accent" id="bulkLaunchSubmit" onclick="MetaLauncher.submitBulk()" style="background:#1877f2;border-color:#1877f2">Launch all as PAUSED</button>
+    <div style="display:flex;gap:8px;margin-top:18px;justify-content:space-between;align-items:center">
+      <button class="btn btn-sm btn-outline" onclick="LaunchPresets.saveFromModal('bulk')" title="Save current modal values as defaults" style="font-size:11px">★ Save as preset</button>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-outline" onclick="MetaLauncher.closeBulk()">Cancel</button>
+        <button class="btn btn-accent" id="bulkLaunchSubmit" onclick="MetaLauncher.submitBulk()" style="background:#1877f2;border-color:#1877f2">Launch all as PAUSED</button>
+      </div>
     </div>
 
     <div id="bulkLaunchStatus" style="margin-top:12px;font-size:12px;color:var(--text-muted)"></div>
@@ -2343,6 +2425,7 @@ const App = {
     PageNav.init();
     SheetView.loadViewPref();
     ProgressTracker.init();
+    LaunchPresets.refreshSelectors();
     await this.refresh();
     Settings.load();
     Settings.renderKeywords();
@@ -2369,6 +2452,199 @@ const App = {
 };
 
 // ============================================================
+// LAUNCH PRESETS — multiple named launch configurations
+// ============================================================
+const LaunchPresets = {
+  KEY: 'adIntel.launchPresets.v1',
+  // Storage shape: { presets: { [id]: {name, adset_id, link_url, cta, utm_template, headlines, bodies} }, default_id: <id|null>, current_edit_id: <id|null> }
+
+  store() {
+    try {
+      const raw = localStorage.getItem(this.KEY);
+      return raw ? JSON.parse(raw) : { presets: {}, default_id: null };
+    } catch (e) { return { presets: {}, default_id: null }; }
+  },
+
+  saveStore(s) {
+    try { localStorage.setItem(this.KEY, JSON.stringify(s)); }
+    catch (e) { Toast.show('Save failed: ' + e.message, 'error'); }
+  },
+
+  list() {
+    const s = this.store();
+    return Object.entries(s.presets || {}).map(([id, p]) => ({
+      id,
+      ...p,
+      isDefault: s.default_id === id
+    }));
+  },
+
+  get(id) {
+    const s = this.store();
+    return s.presets ? s.presets[id] : null;
+  },
+
+  defaultPreset() {
+    const s = this.store();
+    return s.default_id && s.presets ? s.presets[s.default_id] : null;
+  },
+
+  defaultId() {
+    return this.store().default_id;
+  },
+
+  // === Settings-panel editor management ===
+  currentEditId: null,
+
+  newPreset() {
+    this.currentEditId = null;
+    this.populateEditor({ name: '', adset_id: '', link_url: 'https://aliviodedeuda.com/lp-1', cta: 'LEARN_MORE', utm_template: MetaLauncher.DEFAULT_UTM, headlines: [], bodies: [] });
+    document.getElementById('preset-default').checked = false;
+    document.getElementById('preset-select').value = '';
+    document.getElementById('preset-name').focus();
+  },
+
+  loadIntoEditor(id) {
+    if (!id) { this.newPreset(); return; }
+    const p = this.get(id);
+    if (!p) return;
+    this.currentEditId = id;
+    this.populateEditor(p);
+    document.getElementById('preset-default').checked = (this.defaultId() === id);
+  },
+
+  populateEditor(p) {
+    const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = val || ''; };
+    set('preset-name', p.name);
+    set('preset-adset-id', p.adset_id);
+    set('preset-link', p.link_url);
+    set('preset-cta', p.cta || 'LEARN_MORE');
+    set('preset-utm', p.utm_template);
+    set('preset-headlines', (p.headlines || []).join('\n'));
+    set('preset-bodies', (p.bodies || []).join('\n---\n'));
+  },
+
+  savePreset() {
+    const name = document.getElementById('preset-name').value.trim();
+    if (!name) { Toast.show('Preset needs a name', 'error'); return; }
+    const data = {
+      name,
+      adset_id: document.getElementById('preset-adset-id').value.trim(),
+      link_url: document.getElementById('preset-link').value.trim(),
+      cta: document.getElementById('preset-cta').value,
+      utm_template: document.getElementById('preset-utm').value,
+      headlines: document.getElementById('preset-headlines').value
+        .split('\n').map(s => s.trim()).filter(Boolean).slice(0, 5),
+      bodies: document.getElementById('preset-bodies').value
+        .split(/^---\s*$/m).map(s => s.trim()).filter(Boolean).slice(0, 5)
+    };
+    const s = this.store();
+    if (!s.presets) s.presets = {};
+    const id = this.currentEditId || ('p_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7));
+    s.presets[id] = data;
+    if (document.getElementById('preset-default').checked) {
+      s.default_id = id;
+    } else if (s.default_id === id) {
+      // Was default, unchecked → unset
+      s.default_id = null;
+    }
+    this.saveStore(s);
+    this.currentEditId = id;
+    this.refreshSelectors();
+    document.getElementById('preset-select').value = id;
+    const status = document.getElementById('preset-status');
+    if (status) { status.textContent = '✓ Saved'; setTimeout(() => status.textContent = '', 2500); }
+    Toast.show(`Preset "${name}" saved`, 'success');
+  },
+
+  duplicate() {
+    if (!this.currentEditId) { Toast.show('Pick a preset to duplicate', 'error'); return; }
+    const p = this.get(this.currentEditId);
+    if (!p) return;
+    this.currentEditId = null;
+    document.getElementById('preset-select').value = '';
+    this.populateEditor({ ...p, name: p.name + ' (copy)' });
+    document.getElementById('preset-default').checked = false;
+    document.getElementById('preset-name').focus();
+  },
+
+  deleteCurrent() {
+    if (!this.currentEditId) { Toast.show('Pick a preset to delete', 'error'); return; }
+    const p = this.get(this.currentEditId);
+    if (!p) return;
+    if (!confirm(`Delete preset "${p.name}"?`)) return;
+    const s = this.store();
+    delete s.presets[this.currentEditId];
+    if (s.default_id === this.currentEditId) s.default_id = null;
+    this.saveStore(s);
+    this.currentEditId = null;
+    this.refreshSelectors();
+    this.newPreset();
+    Toast.show('Preset deleted', 'info');
+  },
+
+  // === Modal integration ===
+  refreshSelectors() {
+    const presets = this.list();
+    const opts = '<option value="">— No preset —</option>' +
+      presets.map(p => `<option value="${p.id}">${p.isDefault ? '★ ' : ''}${(p.name||'(unnamed)').replace(/</g,'&lt;')}</option>`).join('');
+
+    // Settings editor select
+    const settingsSel = document.getElementById('preset-select');
+    if (settingsSel) {
+      const cur = this.currentEditId || '';
+      settingsSel.innerHTML = '<option value="">— Select a preset to edit —</option>' +
+        presets.map(p => `<option value="${p.id}">${p.isDefault ? '★ ' : ''}${(p.name||'(unnamed)').replace(/</g,'&lt;')}</option>`).join('');
+      settingsSel.value = cur;
+    }
+
+    // Modal selects
+    const launchSel = document.getElementById('launchPreset');
+    if (launchSel) launchSel.innerHTML = opts;
+    const bulkSel = document.getElementById('bulkLaunchPreset');
+    if (bulkSel) bulkSel.innerHTML = opts;
+  },
+
+  // Save current modal values as a new (or named) preset
+  saveFromModal(which) {
+    const name = prompt('Save as preset — name this preset:');
+    if (!name || !name.trim()) return;
+    const cleanName = name.trim();
+
+    const d = { name: cleanName };
+    if (which === 'single') {
+      d.adset_id = document.getElementById('launchAdset').value || '';
+      d.link_url = document.getElementById('launchLink').value.trim();
+      d.cta = document.getElementById('launchCta').value;
+      d.utm_template = document.getElementById('launchUtm').value;
+      d.headlines = MetaLauncher.getVariations('launchHeadlinesList');
+      d.bodies = MetaLauncher.getVariations('launchBodiesList');
+    } else {
+      d.adset_id = document.getElementById('bulkLaunchAdset').value || '';
+      d.link_url = document.getElementById('bulkLaunchLink').value.trim();
+      d.cta = document.getElementById('bulkLaunchCta').value;
+      d.utm_template = document.getElementById('bulkLaunchUtm').value;
+      const override = document.getElementById('bulkLaunchOverrideText').checked;
+      d.headlines = override ? MetaLauncher.getVariations('bulkLaunchHeadlinesList') : [];
+      d.bodies = override ? MetaLauncher.getVariations('bulkLaunchBodiesList') : [];
+    }
+
+    const s = this.store();
+    if (!s.presets) s.presets = {};
+    // If a preset with that exact name exists, overwrite it
+    let id = Object.keys(s.presets).find(k => (s.presets[k].name || '').toLowerCase() === cleanName.toLowerCase());
+    if (!id) id = 'p_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
+    s.presets[id] = d;
+    this.saveStore(s);
+    this.refreshSelectors();
+    // Pre-select the just-saved preset in the modal
+    const sel = document.getElementById(which === 'single' ? 'launchPreset' : 'bulkLaunchPreset');
+    if (sel) sel.value = id;
+    Toast.show(`Saved preset "${cleanName}"`, 'success');
+  }
+};
+
+// ============================================================
 // META LAUNCHER — modal for launching generated creatives to Meta
 // ============================================================
 const MetaLauncher = {
@@ -2381,18 +2657,27 @@ const MetaLauncher = {
     if (!creative) { Toast.show('Creative not found', 'error'); return; }
     this.currentCreative = creative;
 
-    // Pre-fill modal
+    // Refresh preset list in dropdown
+    LaunchPresets.refreshSelectors();
+    const defaultPreset = LaunchPresets.defaultPreset();
+    const defaultId = LaunchPresets.defaultId();
+
     document.getElementById('launchCreativeName').textContent = creative.display_name || creative.headline || creativeId;
     document.getElementById('launchCreativeId').textContent = creativeId;
     document.getElementById('launchAdName').value = (creative.display_name || creative.headline || creativeId).slice(0, 80);
-    // Initialize headline + body variation lists with the creative's stored copy
-    this.renderVariations('launchHeadlinesList', 'headline', [(creative.headline || '').toString()]);
-    const initialBody = (creative.body || creative.ad_text || creative.text_overlay || '').toString();
-    this.renderVariations('launchBodiesList', 'body', [initialBody]);
-    document.getElementById('launchUtm').value = this.DEFAULT_UTM;
-    document.getElementById('launchLink').value = 'https://aliviodedeuda.com/lp-1';
-    document.getElementById('launchCta').value = (creative.cta || 'LEARN_MORE').toUpperCase();
+
+    // Headlines/bodies: prefer default preset, then creative's own copy
+    const presetHeadlines = (defaultPreset && defaultPreset.headlines && defaultPreset.headlines.length > 0) ? defaultPreset.headlines : null;
+    const presetBodies = (defaultPreset && defaultPreset.bodies && defaultPreset.bodies.length > 0) ? defaultPreset.bodies : null;
+    const initialHeadlines = presetHeadlines || [(creative.headline || '').toString()];
+    const initialBodies = presetBodies || [(creative.body || creative.ad_text || creative.text_overlay || '').toString()];
+    this.renderVariations('launchHeadlinesList', 'headline', initialHeadlines);
+    this.renderVariations('launchBodiesList', 'body', initialBodies);
+    document.getElementById('launchUtm').value = (defaultPreset && defaultPreset.utm_template) || this.DEFAULT_UTM;
+    document.getElementById('launchLink').value = (defaultPreset && defaultPreset.link_url) || 'https://aliviodedeuda.com/lp-1';
+    document.getElementById('launchCta').value = ((defaultPreset && defaultPreset.cta) || creative.cta || 'LEARN_MORE').toUpperCase();
     document.getElementById('launchStatus').textContent = '';
+    if (defaultId) document.getElementById('launchPreset').value = defaultId;
 
     // Preview
     const previewEl = document.getElementById('launchPreview');
@@ -2439,6 +2724,10 @@ const MetaLauncher = {
         return `<option value="${a.id}">${camp}${a.name}${warn}</option>`;
       }).join('');
       adsetSel.disabled = false;
+      // Auto-select default preset's adset if it exists in the list
+      if (defaultPreset && defaultPreset.adset_id && this.targets.adsets.some(a => a.id === defaultPreset.adset_id)) {
+        adsetSel.value = defaultPreset.adset_id;
+      }
       document.getElementById('launchSubmit').disabled = false;
       if (hidden > 0) {
         document.getElementById('launchStatus').textContent = `Note: ${hidden} expired ad set${hidden > 1 ? 's' : ''} hidden from this list.`;
@@ -2464,15 +2753,28 @@ const MetaLauncher = {
     }
     this.bulkSelected = eligible;
 
+    LaunchPresets.refreshSelectors();
+    const defaultPreset = LaunchPresets.defaultPreset();
+    const defaultId = LaunchPresets.defaultId();
+
     document.getElementById('bulkLaunchSummary').textContent =
       `${eligible.length} creative${eligible.length > 1 ? 's' : ''} selected · each ad uses its own headline/body from the sheet unless overridden below`;
     document.getElementById('bulkLaunchStatus').textContent = '';
     document.getElementById('bulkLaunchResults').innerHTML = '';
     document.getElementById('bulkLaunchSubmit').disabled = false;
     document.getElementById('bulkLaunchSubmit').textContent = `Launch ${eligible.length} as PAUSED`;
-    document.getElementById('bulkLaunchOverrideText').checked = false;
-    document.getElementById('bulkLaunchTextSection').style.display = 'none';
-    document.getElementById('bulkLaunchUtm').value = this.DEFAULT_UTM;
+    document.getElementById('bulkLaunchLink').value = (defaultPreset && defaultPreset.link_url) || 'https://aliviodedeuda.com/lp-1';
+    document.getElementById('bulkLaunchCta').value = (defaultPreset && defaultPreset.cta) || 'LEARN_MORE';
+    document.getElementById('bulkLaunchUtm').value = (defaultPreset && defaultPreset.utm_template) || this.DEFAULT_UTM;
+    // If preset has headlines/bodies, auto-enable override and pre-fill
+    const hasPresetText = defaultPreset && ((defaultPreset.headlines || []).length > 0 || (defaultPreset.bodies || []).length > 0);
+    document.getElementById('bulkLaunchOverrideText').checked = !!hasPresetText;
+    document.getElementById('bulkLaunchTextSection').style.display = hasPresetText ? '' : 'none';
+    if (hasPresetText) {
+      this.renderVariations('bulkLaunchHeadlinesList', 'headline', defaultPreset.headlines.length > 0 ? defaultPreset.headlines : ['']);
+      this.renderVariations('bulkLaunchBodiesList', 'body', defaultPreset.bodies.length > 0 ? defaultPreset.bodies : ['']);
+    }
+    if (defaultId) document.getElementById('bulkLaunchPreset').value = defaultId;
     document.getElementById('bulkLaunchModal').classList.remove('hidden');
 
     if (!this.targets) {
@@ -2501,7 +2803,54 @@ const MetaLauncher = {
         return `<option value="${a.id}">${camp}${a.name}${warn}</option>`;
       }).join('');
       adsetSel.disabled = false;
+      // Auto-select default preset's adset
+      const defaultPreset = LaunchPresets.defaultPreset();
+      if (defaultPreset && defaultPreset.adset_id && this.targets.adsets.some(a => a.id === defaultPreset.adset_id)) {
+        adsetSel.value = defaultPreset.adset_id;
+      }
     }
+  },
+
+  // Apply a saved preset to the open modal — fills every editable field.
+  applyPreset(presetId, which) {
+    if (!presetId) return;
+    const p = LaunchPresets.get(presetId);
+    if (!p) return;
+
+    if (which === 'bulk') {
+      // Bulk modal
+      document.getElementById('bulkLaunchLink').value = p.link_url || '';
+      document.getElementById('bulkLaunchCta').value = p.cta || 'LEARN_MORE';
+      document.getElementById('bulkLaunchUtm').value = p.utm_template || '';
+      const adsetSel = document.getElementById('bulkLaunchAdset');
+      if (p.adset_id && this.targets && this.targets.adsets && this.targets.adsets.some(a => a.id === p.adset_id)) {
+        adsetSel.value = p.adset_id;
+      }
+      const hasText = (p.headlines || []).length > 0 || (p.bodies || []).length > 0;
+      document.getElementById('bulkLaunchOverrideText').checked = hasText;
+      document.getElementById('bulkLaunchTextSection').style.display = hasText ? '' : 'none';
+      if (hasText) {
+        this.renderVariations('bulkLaunchHeadlinesList', 'headline', (p.headlines && p.headlines.length > 0) ? p.headlines : ['']);
+        this.renderVariations('bulkLaunchBodiesList', 'body', (p.bodies && p.bodies.length > 0) ? p.bodies : ['']);
+      }
+    } else {
+      // Single modal
+      document.getElementById('launchLink').value = p.link_url || '';
+      document.getElementById('launchCta').value = p.cta || 'LEARN_MORE';
+      document.getElementById('launchUtm').value = p.utm_template || '';
+      const adsetSel = document.getElementById('launchAdset');
+      if (p.adset_id && this.targets && this.targets.adsets && this.targets.adsets.some(a => a.id === p.adset_id)) {
+        adsetSel.value = p.adset_id;
+      }
+      // Headlines/bodies — only override if preset has them, else keep what's there
+      if ((p.headlines || []).length > 0) {
+        this.renderVariations('launchHeadlinesList', 'headline', p.headlines);
+      }
+      if ((p.bodies || []).length > 0) {
+        this.renderVariations('launchBodiesList', 'body', p.bodies);
+      }
+    }
+    Toast.show(`Applied preset "${p.name}"`, 'info');
   },
 
   closeBulk() {
