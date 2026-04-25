@@ -1656,9 +1656,10 @@ const SheetView = {
     Toast.show(`Downloading ${filename}`, 'info');
   },
 
-  // Bulk download all selected generated creatives. Browsers will pop up an
-  // 'Allow multiple downloads' permission the first time. We stagger triggers
-  // by 250ms so the browser doesn't merge them.
+  // Bulk download all selected generated creatives as a single ZIP.
+  // Posts the creative_ids to a server endpoint that downloads each from Drive
+  // via OAuth, zips them, and returns the binary. Avoids browser multi-download
+  // limitations entirely.
   async bulkDownload() {
     const ids = Array.from(this.selectedIds);
     if (ids.length === 0) return;
@@ -1671,24 +1672,34 @@ const SheetView = {
       Toast.show('None of the selected items have downloadable media', 'error');
       return;
     }
-    Toast.show(`Starting download of ${eligible.length} creative${eligible.length > 1 ? 's' : ''}${skipped > 0 ? ` (${skipped} skipped — no media)` : ''}…`, 'info');
+    Toast.show(`Zipping ${eligible.length} creative${eligible.length > 1 ? 's' : ''}${skipped > 0 ? ` (${skipped} skipped — no media)` : ''}… can take 30-60s`, 'info');
 
-    for (let i = 0; i < eligible.length; i++) {
-      const c = eligible[i];
-      const driveId = this.driveIdFromCreative(c);
-      const filename = this.creativeFilename(c);
+    try {
+      const resp = await fetch(`${CONFIG.n8nUrl}/webhook/bulk-download`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ creative_ids: eligible.map(c => c.creative_id) })
+      });
+      if (!resp.ok) {
+        const errText = await resp.text();
+        throw new Error(`HTTP ${resp.status}: ${errText.slice(0, 200)}`);
+      }
+      const blob = await resp.blob();
+      if (blob.size === 0) throw new Error('Server returned empty response (Drive credential may be expired — reconnect in n8n)');
+      const ts = new Date().toISOString().slice(0,16).replace(/[T:]/g,'-');
+      const filename = `creatives-${ts}.zip`;
+      const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = `https://drive.google.com/uc?export=download&id=${driveId}`;
+      a.href = url;
       a.download = filename;
-      a.target = '_blank';
-      a.rel = 'noopener';
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-      // Stagger triggers so the browser actually queues each one separately
-      await new Promise(r => setTimeout(r, 350));
+      URL.revokeObjectURL(url);
+      Toast.show(`Downloaded ${filename} (${(blob.size / 1024 / 1024).toFixed(1)} MB)`, 'success');
+    } catch (e) {
+      Toast.show(`Bulk download failed: ${e.message}`, 'error');
     }
-    Toast.show(`Triggered ${eligible.length} download${eligible.length > 1 ? 's' : ''}. Check your downloads folder.`, 'success');
   },
 
   // Replace a broken <img>/<video> thumb with a styled letter placeholder.
