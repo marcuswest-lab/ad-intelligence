@@ -2390,7 +2390,6 @@ const MetaLauncher = {
     const initialBody = (creative.body || creative.ad_text || creative.text_overlay || '').toString();
     this.renderVariations('launchBodiesList', 'body', [initialBody]);
     document.getElementById('launchUtm').value = this.DEFAULT_UTM;
-    document.getElementById('launchMessage').value = creative.body || creative.ad_text || creative.text_overlay || '';
     document.getElementById('launchLink').value = 'https://aliviodedeuda.com/lp-1';
     document.getElementById('launchCta').value = (creative.cta || 'LEARN_MORE').toUpperCase();
     document.getElementById('launchStatus').textContent = '';
