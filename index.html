@@ -509,11 +509,11 @@ tbody tr.selected { background: rgba(99,102,241,0.08); }
     <label>Ad Name (visible in Ads Manager)</label>
     <input type="text" id="launchAdName" placeholder="My Ad — 03-26-2026">
 
-    <label>Headline (max 40 chars)</label>
-    <input type="text" id="launchHeadline" maxlength="40">
+    <label>Headline <span id="launchHeadlineCount" style="color:var(--text-muted);font-weight:400">(0 chars — Meta truncates ~40 in feed)</span></label>
+    <input type="text" id="launchHeadline" oninput="MetaLauncher.updateHeadlineCount()">
 
-    <label>Primary Text / Body</label>
-    <textarea id="launchMessage" maxlength="1000"></textarea>
+    <label>Primary Text / Body <span id="launchMessageCount" style="color:var(--text-muted);font-weight:400">(0 chars — Meta truncates ~125 in feed)</span></label>
+    <textarea id="launchMessage" oninput="MetaLauncher.updateMessageCount()"></textarea>
 
     <label>Landing Page URL</label>
     <input type="text" id="launchLink">
@@ -2242,7 +2242,9 @@ const MetaLauncher = {
     document.getElementById('launchCreativeName').textContent = creative.display_name || creative.headline || creativeId;
     document.getElementById('launchCreativeId').textContent = creativeId;
     document.getElementById('launchAdName').value = (creative.display_name || creative.headline || creativeId).slice(0, 80);
-    document.getElementById('launchHeadline').value = (creative.headline || '').slice(0, 40);
+    document.getElementById('launchHeadline').value = creative.headline || '';
+    this.updateHeadlineCount();
+    this.updateMessageCount();
     document.getElementById('launchMessage').value = creative.body || creative.ad_text || creative.text_overlay || '';
     document.getElementById('launchLink').value = 'https://aliviodedeuda.com/lp-1';
     document.getElementById('launchCta').value = (creative.cta || 'LEARN_MORE').toUpperCase();
@@ -2303,6 +2305,22 @@ const MetaLauncher = {
   close() {
     document.getElementById('launchModal').classList.add('hidden');
     this.currentCreative = null;
+  },
+
+  updateHeadlineCount() {
+    const v = document.getElementById('launchHeadline').value;
+    const n = v.length;
+    const warn = n > 40;
+    document.getElementById('launchHeadlineCount').innerHTML =
+      `(<span style="color:${warn ? 'var(--warning)' : 'var(--text-muted)'}">${n} chars</span>${warn ? ' — Meta may truncate in feed' : ' — Meta truncates ~40 in feed'})`;
+  },
+
+  updateMessageCount() {
+    const v = document.getElementById('launchMessage').value;
+    const n = v.length;
+    const warn = n > 125;
+    document.getElementById('launchMessageCount').innerHTML =
+      `(<span style="color:${warn ? 'var(--warning)' : 'var(--text-muted)'}">${n} chars</span>${warn ? ' — Meta may show "See more" in feed' : ' — Meta truncates ~125 in feed'})`;
   },
 
   async submit() {
