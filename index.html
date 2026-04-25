@@ -2242,13 +2242,27 @@ const MetaLauncher = {
       }
     }
     const adsetSel = document.getElementById('launchAdset');
+    const hidden = this.targets.hidden_expired_count || 0;
     if (this.targets.adsets.length === 0) {
-      adsetSel.innerHTML = '<option>No active ad sets found</option>';
+      adsetSel.innerHTML = '<option>No eligible ad sets</option>';
+      adsetSel.disabled = true;
+      const note = hidden > 0
+        ? `No eligible ad sets. ${hidden} ad set${hidden > 1 ? 's are' : ' is'} hidden because the schedule has ended. Extend the end date in Ads Manager or create a new ad set.`
+        : 'No active ad sets found in your account. Create one in Ads Manager first.';
+      document.getElementById('launchStatus').textContent = note;
+      document.getElementById('launchSubmit').disabled = true;
     } else {
       const campMap = Object.fromEntries((this.targets.campaigns || []).map(c => [c.id, c.name]));
-      adsetSel.innerHTML = this.targets.adsets.map(a =>
-        `<option value="${a.id}">${campMap[a.campaign_id] ? campMap[a.campaign_id] + ' › ' : ''}${a.name}</option>`
-      ).join('');
+      adsetSel.innerHTML = this.targets.adsets.map(a => {
+        const warn = a.warning ? ` — ⚠ ${a.warning}` : '';
+        const camp = campMap[a.campaign_id] ? campMap[a.campaign_id] + ' › ' : '';
+        return `<option value="${a.id}">${camp}${a.name}${warn}</option>`;
+      }).join('');
+      adsetSel.disabled = false;
+      document.getElementById('launchSubmit').disabled = false;
+      if (hidden > 0) {
+        document.getElementById('launchStatus').textContent = `Note: ${hidden} expired ad set${hidden > 1 ? 's' : ''} hidden from this list.`;
+      }
     }
   },
 
