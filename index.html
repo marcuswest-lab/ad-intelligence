@@ -155,6 +155,22 @@ tr:hover td { background: var(--bg-card-hover); }
 .myads-card .iter-btn.secondary:hover { background: var(--bg); color: var(--text); }
 .myads-card .iter-btn.danger { background: transparent; color: #ef4444; border: 1px solid rgba(239,68,68,0.3); }
 .myads-card .iter-btn.danger:hover { background: rgba(239,68,68,0.12); color: #fca5a5; border-color: #ef4444; }
+.myads-card.selected { outline: 2px solid var(--accent); outline-offset: -2px; }
+.myads-card .select-cb { position: absolute; top: 8px; left: 8px; z-index: 2; width: 22px; height: 22px; cursor: pointer; accent-color: var(--accent); background: rgba(0,0,0,0.6); border-radius: 4px; }
+.myads-card { position: relative; }
+
+/* Bulk action bar */
+.bulk-bar { position: sticky; top: 0; z-index: 50; background: var(--bg-card); border: 1px solid var(--accent); border-radius: var(--radius); padding: 10px 14px; margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between; gap: 12px; box-shadow: 0 4px 16px rgba(99,102,241,0.2); }
+.bulk-bar .count { color: var(--text); font-weight: 600; }
+.bulk-bar .actions { display: flex; gap: 8px; }
+.bulk-bar .btn-bulk-del { background: rgba(239,68,68,0.15); color: #fca5a5; border: 1px solid #ef4444; padding: 7px 14px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; }
+.bulk-bar .btn-bulk-del:hover { background: rgba(239,68,68,0.3); color: #fff; }
+.bulk-bar .btn-clear { background: transparent; color: var(--text-muted); border: 1px solid var(--border); padding: 7px 14px; border-radius: 6px; font-size: 13px; cursor: pointer; font-family: inherit; }
+.bulk-bar .btn-clear:hover { color: var(--text); border-color: var(--text-muted); }
+
+/* Row checkboxes (list view) */
+tbody tr.selected { background: rgba(99,102,241,0.08); }
+.row-cb { width: 18px; height: 18px; accent-color: var(--accent); cursor: pointer; }
 .myads-hero { font-size: 13px; color: var(--text-muted); margin-bottom: 16px; padding: 12px; background: var(--bg); border-radius: 6px; border-left: 3px solid var(--accent); }
 
 /* Progress Tracker */
@@ -306,6 +322,7 @@ tr:hover td { background: var(--bg-card-hover); }
     <div class="sheet-search">
       <input type="text" id="sheetSearch" placeholder="Search..." oninput="SheetView.search(this.value)">
     </div>
+    <div id="bulkBar" class="bulk-bar" style="display:none"></div>
     <div id="myAdsGrid" style="display:none"></div>
     <div class="table-wrap" id="sheetTableWrap">
       <table id="sheetTable">
@@ -1224,6 +1241,8 @@ const SheetView = {
   sortCol: null,
   sortDir: -1,
   filter: 'all',
+  // Bulk selection — Set of ids that are selected on the CURRENT tab
+  selectedIds: new Set(),
   // View preferences per tab, persisted in localStorage
   VIEW_KEY: 'ai_dashboard_view_pref',
   viewPref: {},  // { myads: 'grid', scraped: 'list', generated: 'grid' }
@@ -1322,6 +1341,7 @@ const SheetView = {
     this.searchQuery = '';
     this.sortCol = null;
     this.sortDir = -1;
+    this.selectedIds = new Set();  // clear selection when switching tabs
     this.filter = 'all';
     document.getElementById('sheetSearch').value = '';
     document.querySelectorAll('.sheet-tab').forEach(t => t.classList.remove('active'));
@@ -1436,8 +1456,12 @@ const SheetView = {
            </div>`
         : (deleteBtn ? `<div class="actions">${deleteBtn}</div>` : '');
 
+      const selKey = this.bulkKey() === 'creative_id' ? srcId : srcId;
+      const isSelected = selKey && this.selectedIds.has(selKey);
+      const cbHtml = selKey ? `<input type="checkbox" class="select-cb" ${isSelected ? 'checked' : ''} onclick="event.stopPropagation(); SheetView.toggleSelect('${esc(selKey)}', this.checked); this.closest('.myads-card').classList.toggle('selected', this.checked);">` : '';
       return `
-        <div class="myads-card">
+        <div class="myads-card${isSelected ? ' selected' : ''}">
+          ${cbHtml}
           <a href="${openUrl}" target="_blank" style="display:block">
             <img class="thumb" src="${thumbSrc}" alt="${esc(name)}" loading="lazy" onerror="this.style.background='var(--border)';this.style.display='flex';this.style.alignItems='center';this.style.justifyContent='center';this.alt='(preview unavailable)'">
           </a>
@@ -1451,11 +1475,113 @@ const SheetView = {
     }).join('');
 
     gridEl.innerHTML = hero + `<div class="myads-grid">${cards}</div>`;
+
+    // Add "Select all visible" + "Clear" buttons to filter bar
+    const filtersEl2 = document.getElementById('tableFilters');
+    if (filtersEl2 && data.length > 0) {
+      const visibleIds = data.map(r => this.currentTab === 'generated' ? r.creative_id : r.ad_id).filter(Boolean);
+      const allSelected = visibleIds.length > 0 && visibleIds.every(id => this.selectedIds.has(id));
+      const selectAllBtn = `<button class="filter-btn" onclick="SheetView.${allSelected ? 'clearSelection' : `selectAll(${JSON.stringify(visibleIds).replace(/"/g, '&quot;')})`}">${allSelected ? '☑ Clear all' : '☐ Select all visible'}</button>`;
+      filtersEl2.innerHTML += selectAllBtn;
+    }
+    this.renderBulkBar();
   },
 
   iterateFrom(kind, id, iterations) {
     if (kind === 'scraped') this.iterateScraped(id, iterations);
     else this.iterateCreative(id, iterations);
+  },
+
+  // ===== Bulk selection helpers =====
+  // Returns the field name to use as a unique key for selection on the current tab
+  bulkKey() {
+    return this.currentTab === 'generated' ? 'creative_id' : 'ad_id';
+  },
+
+  toggleSelect(id, checked) {
+    if (checked) this.selectedIds.add(id);
+    else this.selectedIds.delete(id);
+    this.renderBulkBar();
+  },
+
+  selectAll(visibleIds) {
+    visibleIds.forEach(id => this.selectedIds.add(id));
+    this.render();
+  },
+
+  toggleAllRowsCheckbox(checked) {
+    // Called from the header checkbox in list view
+    const cfg = this.tabConfig[this.currentTab];
+    const allData = DataService.cache[cfg.key] || [];
+    const data = cfg.filterFn ? allData.filter(cfg.filterFn) : allData;
+    const idField = this.bulkKey();
+    const ids = data.map(r => r[idField]).filter(Boolean);
+    if (checked) ids.forEach(id => this.selectedIds.add(id));
+    else this.selectedIds.clear();
+    this.render();
+  },
+
+  clearSelection() {
+    this.selectedIds = new Set();
+    this.render();
+  },
+
+  renderBulkBar() {
+    const el = document.getElementById('bulkBar');
+    if (!el) return;
+    const n = this.selectedIds.size;
+    if (n === 0) { el.style.display = 'none'; el.innerHTML = ''; return; }
+    el.style.display = 'flex';
+    const tabLabel = this.currentTab === 'generated' ? 'creatives' : 'ads';
+    el.innerHTML = `
+      <div class="count">${n} ${tabLabel} selected</div>
+      <div class="actions">
+        <button class="btn-bulk-del" onclick="SheetView.bulkDelete()">Delete ${n} ${tabLabel}</button>
+        <button class="btn-clear" onclick="SheetView.clearSelection()">Clear selection</button>
+      </div>
+    `;
+  },
+
+  async bulkDelete() {
+    const n = this.selectedIds.size;
+    if (n === 0) return;
+    const ids = Array.from(this.selectedIds);
+    const tab = this.currentTab;
+    Modal.show(
+      `Delete ${n} ${tab === 'generated' ? 'creatives' : 'ads'}?`,
+      `This will permanently remove all ${n} selected items from the sheet${tab === 'generated' ? ' AND from Drive' : ''}. Cannot be undone.`,
+      async () => {
+        Toast.show(`Deleting ${n} items…`, 'info');
+        const endpoint = `${CONFIG.n8nUrl}/webhook/marketcall-sales-log`;
+        const magic = tab === 'generated' ? 'DELETE_CREATIVE' : 'DELETE_SCRAPED_AD';
+        const idField = tab === 'generated' ? 'creative_id' : 'ad_id';
+
+        // Limit concurrency to 4 at a time to avoid Sheets rate-limit
+        const results = { ok: 0, fail: 0 };
+        const queue = [...ids];
+        const workers = Array.from({ length: 4 }, async () => {
+          while (queue.length > 0) {
+            const id = queue.shift();
+            try {
+              const r = await fetch(endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ _magic: magic, [idField]: id })
+              });
+              const j = await r.json().catch(() => ({}));
+              if (j && j.deleted) results.ok++; else results.fail++;
+            } catch (e) {
+              results.fail++;
+            }
+          }
+        });
+        await Promise.all(workers);
+
+        this.selectedIds = new Set();
+        Toast.show(`Bulk delete: ${results.ok} ok · ${results.fail} failed`, results.fail > 0 ? 'error' : 'success');
+        setTimeout(() => App.refresh(), 1500);
+      }
+    );
   },
 
   deleteScrapedAd(adId) {
@@ -1625,8 +1751,10 @@ const SheetView = {
       });
     }
 
-    // Render header
-    document.getElementById('sheetHead').innerHTML = `<tr>${displayCols.map((d, i) => {
+    // Render header (with checkbox column for tabs that support bulk delete)
+    const supportsBulk = ['scraped','myads','generated'].includes(this.currentTab);
+    const cbHeader = supportsBulk ? '<th style="width:30px"><input type="checkbox" class="row-cb" onclick="SheetView.toggleAllRowsCheckbox(this.checked)"></th>' : '';
+    document.getElementById('sheetHead').innerHTML = `<tr>${cbHeader}${displayCols.map((d, i) => {
       const arrow = this.sortCol === i ? (this.sortDir > 0 ? ' &#8593;' : ' &#8595;') : '';
       return `<th onclick="SheetView.sort(${i})">${d}${arrow}</th>`;
     }).join('')}</tr>`;
@@ -1634,10 +1762,16 @@ const SheetView = {
     // Render rows
     const maxRows = 300;
     const tbody = document.getElementById('sheetBody');
+    const idField = this.bulkKey();
     tbody.innerHTML = data.slice(0, maxRows).map((r, rowIdx) => {
       const isExpandable = cfg.expandable;
-      return `<tr ${isExpandable ? `onclick="SheetView.expand(${rowIdx}, this)" style="cursor:pointer"` : ''}>
-        ${cols.map(c => {
+      const rowId = r[idField] || '';
+      const rowSelected = rowId && this.selectedIds.has(rowId);
+      const cbCell = supportsBulk
+        ? `<td style="width:30px"><input type="checkbox" class="row-cb" ${rowSelected ? 'checked' : ''} onclick="event.stopPropagation(); SheetView.toggleSelect('${(rowId||'').replace(/'/g, "\\'")}', this.checked); this.closest('tr').classList.toggle('selected', this.checked);"></td>`
+        : '';
+      return `<tr class="${rowSelected ? 'selected' : ''}" ${isExpandable ? `onclick="SheetView.expand(${rowIdx}, this)" style="cursor:pointer"` : ''}>
+        ${cbCell}${cols.map(c => {
           let val = (r[c] || '').toString();
 
           // Hormozi score with bar
@@ -1702,6 +1836,8 @@ const SheetView = {
     document.getElementById('sheetFooter').innerHTML = `
       <span>${data.length} row${data.length !== 1 ? 's' : ''}${data.length > maxRows ? ` (showing first ${maxRows})` : ''}${this.searchQuery ? ' (filtered)' : ''}</span>
       <span>${allData.length} total in sheet</span>`;
+
+    this.renderBulkBar();
   },
 
   expand(rowIdx, row) {
