@@ -180,6 +180,8 @@ tr:hover td { background: var(--bg-card-hover); }
 .bulk-bar .btn-bulk-del:hover { background: rgba(239,68,68,0.3); color: #fff; }
 .bulk-bar .btn-bulk-dl { background: rgba(34,197,94,0.15); color: #86efac; border: 1px solid #22c55e; padding: 7px 14px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; }
 .bulk-bar .btn-bulk-dl:hover { background: rgba(34,197,94,0.3); color: #fff; }
+.bulk-bar .btn-bulk-launch { background: rgba(24,119,242,0.18); color: #93c5fd; border: 1px solid #1877f2; padding: 7px 14px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; }
+.bulk-bar .btn-bulk-launch:hover { background: rgba(24,119,242,0.4); color: #fff; }
 .bulk-bar .btn-clear { background: transparent; color: var(--text-muted); border: 1px solid var(--border); padding: 7px 14px; border-radius: 6px; font-size: 13px; cursor: pointer; font-family: inherit; }
 .bulk-bar .btn-clear:hover { color: var(--text); border-color: var(--text-muted); }
 
@@ -537,6 +539,43 @@ tbody tr.selected { background: rgba(99,102,241,0.08); }
     </div>
 
     <div id="launchStatus" style="margin-top:12px;font-size:12px;color:var(--text-muted)"></div>
+  </div>
+</div>
+
+<!-- Bulk Launch to Meta Modal -->
+<div class="modal-overlay hidden" id="bulkLaunchModal" onclick="if(event.target===this)MetaLauncher.closeBulk()">
+  <div class="launch-modal">
+    <h3>↗ Bulk Launch to Meta as PAUSED</h3>
+    <div id="bulkLaunchSummary" style="font-size:13px;color:var(--text-dim);margin-bottom:6px"></div>
+
+    <label>Target Ad Set (all creatives go to this ad set)</label>
+    <select id="bulkLaunchAdset"><option>Loading…</option></select>
+
+    <label>Landing Page URL</label>
+    <input type="text" id="bulkLaunchLink" value="https://aliviodedeuda.com/lp-1">
+
+    <label>Call to Action</label>
+    <select id="bulkLaunchCta">
+      <option value="LEARN_MORE">Learn More</option>
+      <option value="GET_QUOTE">Get Quote</option>
+      <option value="APPLY_NOW">Apply Now</option>
+      <option value="SIGN_UP">Sign Up</option>
+      <option value="CONTACT_US">Contact Us</option>
+      <option value="GET_OFFER">Get Offer</option>
+      <option value="SUBSCRIBE">Subscribe</option>
+    </select>
+
+    <div style="font-size:11px;color:var(--text-muted);margin-top:10px;line-height:1.5">
+      Each creative uses its own headline, body text, and CTA from the sheet. All ads land in the same ad set as PAUSED — review and turn on in Ads Manager.
+    </div>
+
+    <div style="display:flex;gap:8px;margin-top:18px;justify-content:flex-end">
+      <button class="btn btn-outline" onclick="MetaLauncher.closeBulk()">Cancel</button>
+      <button class="btn btn-accent" id="bulkLaunchSubmit" onclick="MetaLauncher.submitBulk()" style="background:#1877f2;border-color:#1877f2">Launch all as PAUSED</button>
+    </div>
+
+    <div id="bulkLaunchStatus" style="margin-top:12px;font-size:12px;color:var(--text-muted)"></div>
+    <div id="bulkLaunchResults" style="margin-top:8px;font-size:12px;max-height:240px;overflow-y:auto"></div>
   </div>
 </div>
 
@@ -1759,12 +1798,17 @@ const SheetView = {
     if (n === 0) { el.style.display = 'none'; el.innerHTML = ''; return; }
     el.style.display = 'flex';
     const tabLabel = this.currentTab === 'generated' ? 'creatives' : 'ads';
-    const downloadBtn = this.currentTab === 'generated'
+    const isGen = this.currentTab === 'generated';
+    const launchBtn = isGen
+      ? `<button class="btn-bulk-launch" onclick="MetaLauncher.openBulk()">↗ Launch ${n} to Meta</button>`
+      : '';
+    const downloadBtn = isGen
       ? `<button class="btn-bulk-dl" onclick="SheetView.bulkDownload()">↓ Download ${n}</button>`
       : '';
     el.innerHTML = `
       <div class="count">${n} ${tabLabel} selected</div>
       <div class="actions">
+        ${launchBtn}
         ${downloadBtn}
         <button class="btn-bulk-del" onclick="SheetView.bulkDelete()">Delete ${n} ${tabLabel}</button>
         <button class="btn-clear" onclick="SheetView.clearSelection()">Clear selection</button>
@@ -2372,6 +2416,118 @@ const MetaLauncher = {
   close() {
     document.getElementById('launchModal').classList.add('hidden');
     this.currentCreative = null;
+  },
+
+  // Open the bulk launch modal for all currently selected creatives.
+  async openBulk() {
+    const ids = Array.from(SheetView.selectedIds);
+    if (ids.length === 0) return;
+    const data = DataService.cache;
+    const map = Object.fromEntries((data.generated || []).map(g => [g.creative_id, g]));
+    const eligible = ids.map(id => map[id]).filter(Boolean);
+    if (eligible.length === 0) {
+      Toast.show('No selected creatives found', 'error');
+      return;
+    }
+    this.bulkSelected = eligible;
+
+    document.getElementById('bulkLaunchSummary').textContent =
+      `${eligible.length} creative${eligible.length > 1 ? 's' : ''} selected · headline/body for each comes from the sheet`;
+    document.getElementById('bulkLaunchStatus').textContent = '';
+    document.getElementById('bulkLaunchResults').innerHTML = '';
+    document.getElementById('bulkLaunchSubmit').disabled = false;
+    document.getElementById('bulkLaunchSubmit').textContent = `Launch ${eligible.length} as PAUSED`;
+    document.getElementById('bulkLaunchModal').classList.remove('hidden');
+
+    if (!this.targets) {
+      try {
+        const r = await fetch(`${CONFIG.n8nUrl}/webhook/meta-list-targets`);
+        this.targets = await r.json();
+      } catch (e) {
+        Toast.show('Failed to load Meta targets: ' + e.message, 'error');
+        this.targets = { campaigns: [], adsets: [] };
+      }
+    }
+    const adsetSel = document.getElementById('bulkLaunchAdset');
+    const hidden = this.targets.hidden_expired_count || 0;
+    if (this.targets.adsets.length === 0) {
+      adsetSel.innerHTML = '<option>No eligible ad sets</option>';
+      adsetSel.disabled = true;
+      document.getElementById('bulkLaunchStatus').textContent = hidden > 0
+        ? `No eligible ad sets. ${hidden} hidden because the schedule has ended.`
+        : 'No active ad sets in your account.';
+      document.getElementById('bulkLaunchSubmit').disabled = true;
+    } else {
+      const campMap = Object.fromEntries((this.targets.campaigns || []).map(c => [c.id, c.name]));
+      adsetSel.innerHTML = this.targets.adsets.map(a => {
+        const warn = a.warning ? ` — ⚠ ${a.warning}` : '';
+        const camp = campMap[a.campaign_id] ? campMap[a.campaign_id] + ' › ' : '';
+        return `<option value="${a.id}">${camp}${a.name}${warn}</option>`;
+      }).join('');
+      adsetSel.disabled = false;
+    }
+  },
+
+  closeBulk() {
+    document.getElementById('bulkLaunchModal').classList.add('hidden');
+    this.bulkSelected = null;
+  },
+
+  async submitBulk() {
+    if (!this.bulkSelected || this.bulkSelected.length === 0) return;
+    const btn = document.getElementById('bulkLaunchSubmit');
+    const statusEl = document.getElementById('bulkLaunchStatus');
+    const resultsEl = document.getElementById('bulkLaunchResults');
+    const n = this.bulkSelected.length;
+
+    btn.disabled = true;
+    btn.textContent = `Launching ${n}… (~${Math.ceil(n * 0.8)} min)`;
+    statusEl.textContent = `Uploading ${n} creatives sequentially. Do not close this window.`;
+    resultsEl.innerHTML = '';
+
+    const payload = {
+      creative_ids: this.bulkSelected.map(c => c.creative_id),
+      adset_id: document.getElementById('bulkLaunchAdset').value,
+      link_url: document.getElementById('bulkLaunchLink').value,
+      cta: document.getElementById('bulkLaunchCta').value
+    };
+
+    try {
+      const r = await fetch(`${CONFIG.n8nUrl}/webhook/bulk-launch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const result = await r.json();
+      if (!r.ok) throw new Error(result.message || `HTTP ${r.status}`);
+
+      const ok = result.succeeded || 0;
+      const fail = result.failed || 0;
+      statusEl.innerHTML = `Done. <strong style="color:var(--success)">${ok} succeeded</strong>${fail > 0 ? ` · <strong style="color:var(--danger)">${fail} failed</strong>` : ''}`;
+
+      resultsEl.innerHTML = (result.results || []).map(res => {
+        if (res.ok) {
+          return `<div style="padding:6px 0;border-bottom:1px solid var(--border)">
+            <span style="color:var(--success)">✓</span>
+            ${res.ad_name || res.creative_id}
+            <a href="${res.ads_manager_url}" target="_blank" style="color:#1877f2;margin-left:8px;font-size:11px">open ↗</a>
+          </div>`;
+        }
+        return `<div style="padding:6px 0;border-bottom:1px solid var(--border)">
+          <span style="color:var(--danger)">✗</span>
+          ${res.creative_id}
+          <span style="color:var(--text-muted);font-size:11px;margin-left:8px">${res.error || 'failed'}</span>
+        </div>`;
+      }).join('');
+
+      Toast.show(`${ok}/${n} ads launched as PAUSED`, ok === n ? 'success' : 'info');
+      btn.textContent = 'Done';
+    } catch (e) {
+      statusEl.textContent = '✗ ' + (e.message || 'Bulk launch failed');
+      Toast.show('Bulk launch failed: ' + e.message, 'error');
+      btn.disabled = false;
+      btn.textContent = `Launch ${n} as PAUSED`;
+    }
   },
 
   updateHeadlineCount() {
