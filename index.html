@@ -157,6 +157,16 @@ tr:hover td { background: var(--bg-card-hover); }
 .launch-modal textarea { resize: vertical; min-height: 52px; font-family: inherit; }
 .launch-modal .preview-row { display: flex; gap: 10px; align-items: center; margin-bottom: 6px; }
 .launch-modal .preview-row img, .launch-modal .preview-row video { width: 56px; height: 56px; object-fit: cover; border-radius: 5px; background: #000; }
+.launch-modal .variation-row { display: flex; gap: 6px; margin-bottom: 4px; align-items: flex-start; }
+.launch-modal .variation-row input, .launch-modal .variation-row textarea { flex: 1; }
+.launch-modal .variation-row .var-num { width: 18px; flex: 0 0 18px; color: var(--text-muted); font-size: 11px; padding-top: 9px; text-align: center; }
+.launch-modal .variation-row .var-rm { background: transparent; color: var(--text-muted); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; padding: 0 8px; font-size: 14px; line-height: 1; height: 32px; }
+.launch-modal .variation-row .var-rm:hover { color: var(--danger); border-color: var(--danger); }
+.launch-modal .var-counter { font-size: 10px; color: var(--text-muted); margin-top: 2px; }
+.launch-modal .var-counter.warn { color: var(--warning); }
+.launch-modal .add-variation-btn { background: transparent; color: var(--accent); border: 1px dashed var(--border); padding: 5px 10px; border-radius: 5px; font-size: 11px; cursor: pointer; margin-top: 4px; font-family: inherit; }
+.launch-modal .add-variation-btn:hover { border-color: var(--accent); }
+.launch-modal .add-variation-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .myads-card .meta { padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; border-top: 1px solid var(--border); }
 .myads-card .meta .name { font-weight: 600; font-size: 12px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .myads-card .meta .tag { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
@@ -513,14 +523,19 @@ tbody tr.selected { background: rgba(99,102,241,0.08); }
     <label>Ad Name (visible in Ads Manager)</label>
     <input type="text" id="launchAdName" placeholder="My Ad — 03-26-2026">
 
-    <label>Headline <span id="launchHeadlineCount" style="color:var(--text-muted);font-weight:400">(0 chars — Meta truncates ~40 in feed)</span></label>
-    <input type="text" id="launchHeadline" oninput="MetaLauncher.updateHeadlineCount()">
+    <label>Headlines <span style="color:var(--text-muted);font-weight:400">— up to 5 (Meta rotates)</span></label>
+    <div id="launchHeadlinesList"></div>
+    <button type="button" class="add-variation-btn" onclick="MetaLauncher.addHeadline()" id="launchAddHeadline">+ Add headline variation</button>
 
-    <label>Primary Text / Body <span id="launchMessageCount" style="color:var(--text-muted);font-weight:400">(0 chars — Meta truncates ~125 in feed)</span></label>
-    <textarea id="launchMessage" oninput="MetaLauncher.updateMessageCount()"></textarea>
+    <label>Primary Text / Body <span style="color:var(--text-muted);font-weight:400">— up to 5 (Meta rotates)</span></label>
+    <div id="launchBodiesList"></div>
+    <button type="button" class="add-variation-btn" onclick="MetaLauncher.addBody()" id="launchAddBody">+ Add body variation</button>
 
     <label>Landing Page URL</label>
     <input type="text" id="launchLink">
+
+    <label>URL Parameters (UTMs) <span style="color:var(--text-muted);font-weight:400">— Meta substitutes <code style="font-size:10px">{{macros}}</code> at delivery</span></label>
+    <textarea id="launchUtm" style="font-family:monospace;font-size:11px;min-height:54px"></textarea>
 
     <label>Call to Action</label>
     <select id="launchCta">
@@ -565,8 +580,25 @@ tbody tr.selected { background: rgba(99,102,241,0.08); }
       <option value="SUBSCRIBE">Subscribe</option>
     </select>
 
+    <label>
+      <input type="checkbox" id="bulkLaunchOverrideText" onchange="MetaLauncher.toggleBulkText()" style="width:auto;margin-right:6px">
+      Override headline/body for all (instead of using each creative's own)
+    </label>
+    <div id="bulkLaunchTextSection" style="display:none">
+      <label style="margin-top:8px">Headlines <span style="color:var(--text-muted);font-weight:400">— up to 5</span></label>
+      <div id="bulkLaunchHeadlinesList"></div>
+      <button type="button" class="add-variation-btn" onclick="MetaLauncher.addBulkHeadline()">+ Add headline variation</button>
+
+      <label>Primary Text / Body <span style="color:var(--text-muted);font-weight:400">— up to 5</span></label>
+      <div id="bulkLaunchBodiesList"></div>
+      <button type="button" class="add-variation-btn" onclick="MetaLauncher.addBulkBody()">+ Add body variation</button>
+    </div>
+
+    <label>URL Parameters (UTMs) <span style="color:var(--text-muted);font-weight:400">— applied to every ad</span></label>
+    <textarea id="bulkLaunchUtm" style="font-family:monospace;font-size:11px;min-height:54px"></textarea>
+
     <div style="font-size:11px;color:var(--text-muted);margin-top:10px;line-height:1.5">
-      Each creative uses its own headline, body text, and CTA from the sheet. All ads land in the same ad set as PAUSED — review and turn on in Ads Manager.
+      All ads land in the selected ad set as PAUSED. Standard Enhancements + multi-advertiser ads are auto-disabled.
     </div>
 
     <div style="display:flex;gap:8px;margin-top:18px;justify-content:flex-end">
@@ -2353,9 +2385,11 @@ const MetaLauncher = {
     document.getElementById('launchCreativeName').textContent = creative.display_name || creative.headline || creativeId;
     document.getElementById('launchCreativeId').textContent = creativeId;
     document.getElementById('launchAdName').value = (creative.display_name || creative.headline || creativeId).slice(0, 80);
-    document.getElementById('launchHeadline').value = creative.headline || '';
-    this.updateHeadlineCount();
-    this.updateMessageCount();
+    // Initialize headline + body variation lists with the creative's stored copy
+    this.renderVariations('launchHeadlinesList', 'headline', [(creative.headline || '').toString()]);
+    const initialBody = (creative.body || creative.ad_text || creative.text_overlay || '').toString();
+    this.renderVariations('launchBodiesList', 'body', [initialBody]);
+    document.getElementById('launchUtm').value = this.DEFAULT_UTM;
     document.getElementById('launchMessage').value = creative.body || creative.ad_text || creative.text_overlay || '';
     document.getElementById('launchLink').value = 'https://aliviodedeuda.com/lp-1';
     document.getElementById('launchCta').value = (creative.cta || 'LEARN_MORE').toUpperCase();
@@ -2432,11 +2466,14 @@ const MetaLauncher = {
     this.bulkSelected = eligible;
 
     document.getElementById('bulkLaunchSummary').textContent =
-      `${eligible.length} creative${eligible.length > 1 ? 's' : ''} selected · headline/body for each comes from the sheet`;
+      `${eligible.length} creative${eligible.length > 1 ? 's' : ''} selected · each ad uses its own headline/body from the sheet unless overridden below`;
     document.getElementById('bulkLaunchStatus').textContent = '';
     document.getElementById('bulkLaunchResults').innerHTML = '';
     document.getElementById('bulkLaunchSubmit').disabled = false;
     document.getElementById('bulkLaunchSubmit').textContent = `Launch ${eligible.length} as PAUSED`;
+    document.getElementById('bulkLaunchOverrideText').checked = false;
+    document.getElementById('bulkLaunchTextSection').style.display = 'none';
+    document.getElementById('bulkLaunchUtm').value = this.DEFAULT_UTM;
     document.getElementById('bulkLaunchModal').classList.remove('hidden');
 
     if (!this.targets) {
@@ -2489,8 +2526,20 @@ const MetaLauncher = {
       creative_ids: this.bulkSelected.map(c => c.creative_id),
       adset_id: document.getElementById('bulkLaunchAdset').value,
       link_url: document.getElementById('bulkLaunchLink').value,
-      cta: document.getElementById('bulkLaunchCta').value
+      cta: document.getElementById('bulkLaunchCta').value,
+      utm_template: document.getElementById('bulkLaunchUtm').value
     };
+    if (document.getElementById('bulkLaunchOverrideText').checked) {
+      const headlines = this.getVariations('bulkLaunchHeadlinesList');
+      const bodies = this.getVariations('bulkLaunchBodiesList');
+      if (headlines.length === 0) {
+        Toast.show('At least one headline is required when overriding', 'error');
+        btn.disabled = false; btn.textContent = `Launch ${n} as PAUSED`;
+        return;
+      }
+      payload.headlines = headlines;
+      payload.bodies = bodies;
+    }
 
     try {
       const r = await fetch(`${CONFIG.n8nUrl}/webhook/bulk-launch`, {
@@ -2530,20 +2579,108 @@ const MetaLauncher = {
     }
   },
 
-  updateHeadlineCount() {
-    const v = document.getElementById('launchHeadline').value;
-    const n = v.length;
-    const warn = n > 40;
-    document.getElementById('launchHeadlineCount').innerHTML =
-      `(<span style="color:${warn ? 'var(--warning)' : 'var(--text-muted)'}">${n} chars</span>${warn ? ' — Meta may truncate in feed' : ' — Meta truncates ~40 in feed'})`;
+  // Default UTM template — user's preset.
+  DEFAULT_UTM: 'utm_medium=facebook&utm_campaign={{campaign.name}}&utm_adset={{adset.name}}&utm_ad={{ad.name}}&utm_placement={{placement}}&utm_campaignid={{campaign.id}}&utm_adsetid={{adset.id}}&utm_adid={{ad.id}}',
+
+  // ----- Variation row helpers (single launch modal) -----
+  renderVariations(containerId, kind, values) {
+    const limit = kind === 'headline' ? 40 : 125;
+    const limitLabel = kind === 'headline' ? '~40 in feed' : '~125 in feed';
+    const isTextarea = kind === 'body';
+    const input = (val, idx) => {
+      const el = isTextarea
+        ? `<textarea oninput="MetaLauncher.updateVarCount('${containerId}',${idx},${limit})" style="min-height:48px">${(val||'').replace(/</g,'&lt;')}</textarea>`
+        : `<input type="text" value="${(val||'').replace(/"/g,'&quot;')}" oninput="MetaLauncher.updateVarCount('${containerId}',${idx},${limit})">`;
+      const removeBtn = idx > 0 || values.length > 1
+        ? `<button type="button" class="var-rm" onclick="MetaLauncher.removeVariation('${containerId}',${idx})">×</button>`
+        : '';
+      const len = (val || '').length;
+      const warn = len > limit;
+      return `<div class="variation-row" data-idx="${idx}">
+        <span class="var-num">${idx + 1}</span>
+        <div style="flex:1">
+          ${el}
+          <div class="var-counter${warn ? ' warn' : ''}" data-counter>${len} chars · Meta truncates ${limitLabel}</div>
+        </div>
+        ${removeBtn}
+      </div>`;
+    };
+    document.getElementById(containerId).innerHTML = values.map((v,i) => input(v,i)).join('');
+    // Disable Add button if at limit
+    const addBtnId = containerId.replace('List','').replace('launch','launchAdd').replace('bulkLaunch','bulkLaunchAdd') + (kind === 'headline' ? 'Headline' : 'Body');
+    // Simpler: find add button by parent
+    const allBtns = document.querySelectorAll('.add-variation-btn');
+    allBtns.forEach(b => {
+      const onclickAttr = b.getAttribute('onclick') || '';
+      if ((kind === 'headline' && onclickAttr.includes(containerId.includes('bulk') ? 'addBulkHeadline' : 'addHeadline')) ||
+          (kind === 'body' && onclickAttr.includes(containerId.includes('bulk') ? 'addBulkBody' : 'addBody'))) {
+        b.disabled = values.length >= 5;
+      }
+    });
   },
 
-  updateMessageCount() {
-    const v = document.getElementById('launchMessage').value;
-    const n = v.length;
-    const warn = n > 125;
-    document.getElementById('launchMessageCount').innerHTML =
-      `(<span style="color:${warn ? 'var(--warning)' : 'var(--text-muted)'}">${n} chars</span>${warn ? ' — Meta may show "See more" in feed' : ' — Meta truncates ~125 in feed'})`;
+  updateVarCount(containerId, idx, limit) {
+    const row = document.querySelector(`#${containerId} .variation-row[data-idx="${idx}"]`);
+    if (!row) return;
+    const inp = row.querySelector('input, textarea');
+    const counter = row.querySelector('[data-counter]');
+    const len = inp.value.length;
+    const limitLabel = limit === 40 ? '~40 in feed' : '~125 in feed';
+    counter.textContent = `${len} chars · Meta truncates ${limitLabel}`;
+    counter.classList.toggle('warn', len > limit);
+  },
+
+  getVariations(containerId) {
+    return Array.from(document.querySelectorAll(`#${containerId} input, #${containerId} textarea`))
+      .map(el => el.value.trim())
+      .filter(v => v.length > 0);
+  },
+
+  addHeadline() {
+    const cur = this.getVariations('launchHeadlinesList');
+    if (cur.length >= 5) return;
+    cur.push('');
+    this.renderVariations('launchHeadlinesList', 'headline', cur);
+  },
+  addBody() {
+    const cur = this.getVariations('launchBodiesList');
+    if (cur.length >= 5) return;
+    cur.push('');
+    this.renderVariations('launchBodiesList', 'body', cur);
+  },
+  addBulkHeadline() {
+    const cur = this.getVariations('bulkLaunchHeadlinesList');
+    if (cur.length >= 5) return;
+    cur.push('');
+    this.renderVariations('bulkLaunchHeadlinesList', 'headline', cur);
+  },
+  addBulkBody() {
+    const cur = this.getVariations('bulkLaunchBodiesList');
+    if (cur.length >= 5) return;
+    cur.push('');
+    this.renderVariations('bulkLaunchBodiesList', 'body', cur);
+  },
+
+  removeVariation(containerId, idx) {
+    const cur = this.getVariations(containerId);
+    cur.splice(idx, 1);
+    if (cur.length === 0) cur.push('');
+    const kind = containerId.toLowerCase().includes('headline') ? 'headline' : 'body';
+    this.renderVariations(containerId, kind, cur);
+  },
+
+  toggleBulkText() {
+    const checked = document.getElementById('bulkLaunchOverrideText').checked;
+    document.getElementById('bulkLaunchTextSection').style.display = checked ? '' : 'none';
+    if (checked) {
+      // Initialize with one empty row each if empty
+      if (this.getVariations('bulkLaunchHeadlinesList').length === 0) {
+        this.renderVariations('bulkLaunchHeadlinesList', 'headline', ['']);
+      }
+      if (this.getVariations('bulkLaunchBodiesList').length === 0) {
+        this.renderVariations('bulkLaunchBodiesList', 'body', ['']);
+      }
+    }
   },
 
   async submit() {
@@ -2553,14 +2690,22 @@ const MetaLauncher = {
     btn.disabled = true; btn.textContent = 'Launching… (~30-60s)';
     statusEl.textContent = 'Uploading creative + creating ad…';
 
+    const headlines = this.getVariations('launchHeadlinesList');
+    const bodies = this.getVariations('launchBodiesList');
+    if (headlines.length === 0) {
+      Toast.show('At least one headline is required', 'error');
+      btn.disabled = false; btn.textContent = 'Launch as PAUSED';
+      return;
+    }
     const payload = {
       creative_id: this.currentCreative.creative_id,
       adset_id: document.getElementById('launchAdset').value,
       name: document.getElementById('launchAdName').value,
-      headline: document.getElementById('launchHeadline').value,
-      message: document.getElementById('launchMessage').value,
+      headlines: headlines,
+      bodies: bodies,
       link_url: document.getElementById('launchLink').value,
-      cta: document.getElementById('launchCta').value
+      cta: document.getElementById('launchCta').value,
+      utm_template: document.getElementById('launchUtm').value
     };
 
     try {
