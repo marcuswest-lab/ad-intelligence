@@ -144,6 +144,8 @@ tr:hover td { background: var(--bg-card-hover); }
 .myads-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; display: flex; flex-direction: column; transition: transform 0.15s, box-shadow 0.15s; }
 .myads-card:hover { transform: translateY(-2px); box-shadow: 0 8px 20px rgba(0,0,0,0.25); border-color: var(--accent); }
 .myads-card .thumb { width: 100%; aspect-ratio: 1/1; object-fit: cover; background: var(--bg); display: block; cursor: pointer; }
+.myads-card video.thumb { background: #000; }
+.myads-card .thumb-placeholder { display: flex; align-items: center; justify-content: center; font-size: 56px; font-weight: 700; color: var(--text-muted); background: linear-gradient(135deg, rgba(99,102,241,0.15), rgba(168,85,247,0.15)); }
 .myads-card .meta { padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; border-top: 1px solid var(--border); }
 .myads-card .meta .name { font-weight: 600; font-size: 12px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .myads-card .meta .tag { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
@@ -1470,8 +1472,26 @@ const SheetView = {
 
       const esc = Performance.esc;
       const driveId = extractDriveId(imgUrl);
+      const videoUrl = (r.video_url || '').toString();
       const thumbSrc = driveId ? `https://drive.google.com/thumbnail?id=${driveId}&sz=w512` : imgUrl;
-      const openUrl = driveId ? `https://drive.google.com/file/d/${driveId}/view` : (imgUrl || '#');
+      const openUrl = driveId ? `https://drive.google.com/file/d/${driveId}/view` : (imgUrl || videoUrl || r.link_url || '#');
+
+      // Decide preview element:
+      //   - Drive: use thumbnail API
+      //   - video_url present (and no usable image): render <video> (autoplay muted)
+      //   - fbcdn/external image: use <img> with no-referrer policy and onerror fallback
+      //   - nothing usable: styled placeholder with page name
+      const isVideo = (!imgUrl || imgUrl.endsWith('.mp4') || imgUrl.includes('/video/')) && videoUrl && /\.mp4($|\?)/i.test(videoUrl);
+      const placeholderInitial = (r.page_name || r.headline || 'Ad').toString().trim().charAt(0).toUpperCase() || '?';
+      const placeholderHtml = `<div class="thumb thumb-placeholder" title="${esc(r.page_name || 'preview unavailable')}">${esc(placeholderInitial)}</div>`;
+      let previewHtml;
+      if (isVideo) {
+        previewHtml = `<video class="thumb" src="${esc(videoUrl)}" muted playsinline loop preload="metadata" onmouseover="this.play()" onmouseout="this.pause()" onerror="this.outerHTML='${placeholderHtml.replace(/'/g,"\\'")}'"></video>`;
+      } else if (thumbSrc && thumbSrc.startsWith('http')) {
+        previewHtml = `<img class="thumb" src="${esc(thumbSrc)}" alt="${esc(name)}" loading="lazy" referrerpolicy="no-referrer" onerror="this.outerHTML='${placeholderHtml.replace(/'/g,"\\'")}'">`;
+      } else {
+        previewHtml = placeholderHtml;
+      }
 
       // Delete on Generated Creatives = full delete (Drive + sheet row)
       // Delete on Scraped Ads / My Ads = remove from sheet (Drive only deleted for source=my-ad)
@@ -1497,7 +1517,7 @@ const SheetView = {
         <div class="myads-card${isSelected ? ' selected' : ''}">
           ${cbHtml}
           <a href="${openUrl}" target="_blank" style="display:block">
-            <img class="thumb" src="${thumbSrc}" alt="${esc(name)}" loading="lazy" onerror="this.style.background='var(--border)';this.style.display='flex';this.style.alignItems='center';this.style.justifyContent='center';this.alt='(preview unavailable)'">
+            ${previewHtml}
           </a>
           <div class="meta">
             <div class="name">${esc(name.slice(0, 80))}</div>
@@ -1842,15 +1862,21 @@ const SheetView = {
             const driveMatch = val.match(/drive\.google\.com\/file\/d\/([^\/]+)/) || val.match(/drive\.google\.com\/.*?[?&]id=([^&]+)/);
             const imgSrc = driveMatch ? `https://drive.google.com/thumbnail?id=${driveMatch[1]}&sz=w240` : val;
             return `<td style="white-space:nowrap">
-              <a href="${val}" target="_blank" title="Open in new tab"><img src="${imgSrc}" style="max-width:90px;max-height:55px;border-radius:4px;vertical-align:middle;box-shadow:0 1px 3px rgba(0,0,0,0.3)" onerror="this.outerHTML='<span style=color:var(--text-muted);font-size:11px>(preview unavailable)</span>'"></a>
+              <a href="${val}" target="_blank" title="Open in new tab"><img src="${imgSrc}" referrerpolicy="no-referrer" style="max-width:90px;max-height:55px;border-radius:4px;vertical-align:middle;box-shadow:0 1px 3px rgba(0,0,0,0.3)" onerror="this.outerHTML='<span style=color:var(--text-muted);font-size:11px>(preview unavailable)</span>'"></a>
               <a href="${val}" target="_blank" style="color:var(--accent);font-size:11px;margin-left:8px;text-decoration:underline">Open</a>
             </td>`;
           }
           if (c === 'video_url' && val && val.startsWith('http')) {
             const driveMatch = val.match(/drive\.google\.com\/file\/d\/([^\/]+)/);
             const thumbSrc = driveMatch ? `https://drive.google.com/thumbnail?id=${driveMatch[1]}&sz=w240` : '';
+            const isMp4 = /\.mp4($|\?)/i.test(val);
+            const inlinePreview = thumbSrc
+              ? `<a href="${val}" target="_blank"><img src="${thumbSrc}" referrerpolicy="no-referrer" style="max-width:90px;max-height:55px;border-radius:4px;vertical-align:middle;box-shadow:0 1px 3px rgba(0,0,0,0.3)" onerror="this.outerHTML='<span style=color:var(--text-muted);font-size:11px>video</span>'"></a>`
+              : isMp4
+                ? `<video src="${val}" muted playsinline preload="metadata" style="max-width:90px;max-height:55px;border-radius:4px;vertical-align:middle;background:#000" onmouseover="this.play()" onmouseout="this.pause()"></video>`
+                : '';
             return `<td style="white-space:nowrap">
-              ${thumbSrc ? `<a href="${val}" target="_blank"><img src="${thumbSrc}" style="max-width:90px;max-height:55px;border-radius:4px;vertical-align:middle;box-shadow:0 1px 3px rgba(0,0,0,0.3)" onerror="this.outerHTML='<span style=color:var(--text-muted);font-size:11px>video</span>'"></a>` : ''}
+              ${inlinePreview}
               <a href="${val}" target="_blank" style="color:var(--accent);font-size:11px;margin-left:8px;text-decoration:underline">▶ Watch</a>
             </td>`;
           }
