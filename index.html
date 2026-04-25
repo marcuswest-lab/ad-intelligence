@@ -146,6 +146,15 @@ tr:hover td { background: var(--bg-card-hover); }
 .myads-card .thumb { width: 100%; aspect-ratio: 1/1; object-fit: cover; background: var(--bg); display: block; cursor: pointer; }
 .myads-card video.thumb { background: #000; }
 .myads-card .thumb-placeholder { display: flex; align-items: center; justify-content: center; font-size: 56px; font-weight: 700; color: var(--text-muted); background: linear-gradient(135deg, rgba(99,102,241,0.15), rgba(168,85,247,0.15)); }
+.iter-btn.launch { background: #1877f2; color: white; border: none; }
+.iter-btn.launch:hover { background: #0e5fcc; }
+.launch-modal { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 24px; max-width: 560px; width: 90%; max-height: 90vh; overflow-y: auto; }
+.launch-modal h3 { margin: 0 0 12px; }
+.launch-modal label { display: block; font-size: 12px; color: var(--text-muted); margin-bottom: 4px; margin-top: 14px; }
+.launch-modal input, .launch-modal select, .launch-modal textarea { width: 100%; background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 8px 10px; border-radius: 6px; font-size: 13px; box-sizing: border-box; }
+.launch-modal textarea { resize: vertical; min-height: 60px; font-family: inherit; }
+.launch-modal .preview-row { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; }
+.launch-modal .preview-row img, .launch-modal .preview-row video { width: 80px; height: 80px; object-fit: cover; border-radius: 6px; background: #000; }
 .myads-card .meta { padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; border-top: 1px solid var(--border); }
 .myads-card .meta .name { font-weight: 600; font-size: 12px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .myads-card .meta .tag { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
@@ -479,6 +488,53 @@ tbody tr.selected { background: rgba(99,102,241,0.08); }
 
 <!-- Toast Container -->
 <div class="toast-container" id="toasts"></div>
+
+<!-- Launch to Meta Modal -->
+<div class="modal-overlay hidden" id="launchModal" onclick="if(event.target===this)MetaLauncher.close()">
+  <div class="launch-modal">
+    <h3>↗ Launch to Meta as PAUSED</h3>
+    <div class="preview-row">
+      <div id="launchPreview"></div>
+      <div style="flex:1">
+        <div style="font-size:13px;font-weight:600" id="launchCreativeName"></div>
+        <div style="font-size:11px;color:var(--text-muted);font-family:monospace" id="launchCreativeId"></div>
+      </div>
+    </div>
+
+    <label>Target Ad Set</label>
+    <select id="launchAdset"><option>Loading…</option></select>
+
+    <label>Ad Name (visible in Ads Manager)</label>
+    <input type="text" id="launchAdName" placeholder="My Ad — 03-26-2026">
+
+    <label>Headline (max 40 chars)</label>
+    <input type="text" id="launchHeadline" maxlength="40">
+
+    <label>Primary Text / Body</label>
+    <textarea id="launchMessage" maxlength="1000"></textarea>
+
+    <label>Landing Page URL</label>
+    <input type="text" id="launchLink">
+
+    <label>Call to Action</label>
+    <select id="launchCta">
+      <option value="LEARN_MORE">Learn More</option>
+      <option value="GET_QUOTE">Get Quote</option>
+      <option value="APPLY_NOW">Apply Now</option>
+      <option value="SIGN_UP">Sign Up</option>
+      <option value="CONTACT_US">Contact Us</option>
+      <option value="GET_OFFER">Get Offer</option>
+      <option value="SUBSCRIBE">Subscribe</option>
+    </select>
+
+    <div style="display:flex;gap:8px;margin-top:20px;justify-content:flex-end">
+      <button class="btn btn-outline" onclick="MetaLauncher.close()">Cancel</button>
+      <button class="btn btn-accent" id="launchSubmit" onclick="MetaLauncher.submit()" style="background:#1877f2;border-color:#1877f2">Launch as PAUSED</button>
+    </div>
+
+    <div id="launchStatus" style="margin-top:12px;font-size:12px;color:var(--text-muted)"></div>
+  </div>
+</div>
 
 <!-- Confirm Modal -->
 <div class="modal-overlay hidden" id="confirmModal">
@@ -1505,8 +1561,13 @@ const SheetView = {
         : canDeleteScraped
           ? `<button class="iter-btn danger" onclick="SheetView.deleteScrapedAd('${esc(srcId)}')">Delete</button>`
           : '';
+      // "Launch to Meta" only on Generated Creatives tab (the ones we actually have media files for)
+      const launchBtn = (this.currentTab === 'generated' && srcId)
+        ? `<button class="iter-btn launch" onclick="MetaLauncher.open('${esc(srcId)}')">↗ Launch to Meta</button>`
+        : '';
       const actionsHtml = iterateAction
         ? `<div class="actions">
+             ${launchBtn}
              <button class="iter-btn primary" onclick="SheetView.iterateFrom('${iterateAction.kind}','${esc(iterateAction.id)}', 3)">Iterate (3 variations)</button>
              <button class="iter-btn secondary" onclick="SheetView.iterateFrom('${iterateAction.kind}','${esc(iterateAction.id)}', 1)">Quick test (1)</button>
              ${deleteBtn}
@@ -2126,6 +2187,112 @@ const App = {
     } catch (e) {
       document.getElementById('lastUpdated').textContent = 'Error loading data';
       Toast.show('Failed to refresh: ' + e.message, 'error');
+    }
+  }
+};
+
+// ============================================================
+// META LAUNCHER — modal for launching generated creatives to Meta
+// ============================================================
+const MetaLauncher = {
+  targets: null,
+  currentCreative: null,
+
+  async open(creativeId) {
+    const data = DataService.cache;
+    const creative = (data.generated || []).find(g => g.creative_id === creativeId);
+    if (!creative) { Toast.show('Creative not found', 'error'); return; }
+    this.currentCreative = creative;
+
+    // Pre-fill modal
+    document.getElementById('launchCreativeName').textContent = creative.display_name || creative.headline || creativeId;
+    document.getElementById('launchCreativeId').textContent = creativeId;
+    document.getElementById('launchAdName').value = (creative.display_name || creative.headline || creativeId).slice(0, 80);
+    document.getElementById('launchHeadline').value = (creative.headline || '').slice(0, 40);
+    document.getElementById('launchMessage').value = creative.body || creative.ad_text || creative.text_overlay || '';
+    document.getElementById('launchLink').value = 'https://aliviodedeuda.com/lp-1';
+    document.getElementById('launchCta').value = (creative.cta || 'LEARN_MORE').toUpperCase();
+    document.getElementById('launchStatus').textContent = '';
+
+    // Preview
+    const previewEl = document.getElementById('launchPreview');
+    const isVideo = !!creative.video_url;
+    const url = creative.video_url || creative.generated_image_url || '';
+    const m = url.match(/\/d\/([A-Za-z0-9_-]+)/);
+    const driveId = m ? m[1] : null;
+    if (isVideo && url) {
+      previewEl.innerHTML = `<video src="${url}" muted playsinline preload="metadata"></video>`;
+    } else if (driveId) {
+      previewEl.innerHTML = `<img src="https://drive.google.com/thumbnail?id=${driveId}&sz=w160" alt="">`;
+    } else {
+      previewEl.innerHTML = `<div style="width:80px;height:80px;background:var(--bg);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:32px;font-weight:700;color:var(--text-muted)">?</div>`;
+    }
+
+    // Show modal
+    document.getElementById('launchModal').classList.remove('hidden');
+
+    // Load targets if not cached
+    if (!this.targets) {
+      try {
+        const r = await fetch(`${CONFIG.n8nUrl}/webhook/meta-list-targets`);
+        this.targets = await r.json();
+      } catch (e) {
+        Toast.show('Failed to load Meta targets: ' + e.message, 'error');
+        this.targets = { campaigns: [], adsets: [] };
+      }
+    }
+    const adsetSel = document.getElementById('launchAdset');
+    if (this.targets.adsets.length === 0) {
+      adsetSel.innerHTML = '<option>No active ad sets found</option>';
+    } else {
+      const campMap = Object.fromEntries((this.targets.campaigns || []).map(c => [c.id, c.name]));
+      adsetSel.innerHTML = this.targets.adsets.map(a =>
+        `<option value="${a.id}">${campMap[a.campaign_id] ? campMap[a.campaign_id] + ' › ' : ''}${a.name}</option>`
+      ).join('');
+    }
+  },
+
+  close() {
+    document.getElementById('launchModal').classList.add('hidden');
+    this.currentCreative = null;
+  },
+
+  async submit() {
+    if (!this.currentCreative) return;
+    const btn = document.getElementById('launchSubmit');
+    const statusEl = document.getElementById('launchStatus');
+    btn.disabled = true; btn.textContent = 'Launching… (~30-60s)';
+    statusEl.textContent = 'Uploading creative + creating ad…';
+
+    const payload = {
+      creative_id: this.currentCreative.creative_id,
+      adset_id: document.getElementById('launchAdset').value,
+      name: document.getElementById('launchAdName').value,
+      headline: document.getElementById('launchHeadline').value,
+      message: document.getElementById('launchMessage').value,
+      link_url: document.getElementById('launchLink').value,
+      cta: document.getElementById('launchCta').value
+    };
+
+    try {
+      const r = await fetch(`${CONFIG.n8nUrl}/webhook/meta-launch-ad`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const result = await r.json();
+      if (!r.ok || !result.ok) {
+        throw new Error(result.error || result.message || `HTTP ${r.status}`);
+      }
+      statusEl.innerHTML = `✓ Launched as PAUSED. <a href="${result.ads_manager_url}" target="_blank" style="color:#1877f2">Open in Ads Manager</a>`;
+      Toast.show('Ad launched as PAUSED', 'success');
+      btn.textContent = 'Done';
+      // Auto-close after 5s
+      setTimeout(() => this.close(), 6000);
+    } catch (e) {
+      statusEl.textContent = '✗ ' + (e.message || 'Launch failed');
+      Toast.show('Launch failed: ' + e.message, 'error');
+      btn.disabled = false; btn.textContent = 'Launch as PAUSED';
     }
   }
 };
