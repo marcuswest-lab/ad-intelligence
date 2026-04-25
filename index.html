@@ -2830,13 +2830,21 @@ const MetaLauncher = {
     document.getElementById('bulkLaunchLink').value = (defaultPreset && defaultPreset.link_url) || 'https://aliviodedeuda.com/lp-1';
     document.getElementById('bulkLaunchCta').value = (defaultPreset && defaultPreset.cta) || 'LEARN_MORE';
     document.getElementById('bulkLaunchUtm').value = (defaultPreset && defaultPreset.utm_template) || this.DEFAULT_UTM;
-    // If preset has headlines/bodies, auto-enable override and pre-fill
-    const hasPresetText = defaultPreset && ((defaultPreset.headlines || []).length > 0 || (defaultPreset.bodies || []).length > 0);
+    // If preset has headlines/bodies/descriptions, auto-enable override and pre-fill
+    const hasPresetText = defaultPreset && (
+      (defaultPreset.headlines || []).length > 0 ||
+      (defaultPreset.bodies || []).length > 0 ||
+      (defaultPreset.descriptions || []).length > 0
+    );
     document.getElementById('bulkLaunchOverrideText').checked = !!hasPresetText;
     document.getElementById('bulkLaunchTextSection').style.display = hasPresetText ? '' : 'none';
     if (hasPresetText) {
-      this.renderVariations('bulkLaunchHeadlinesList', 'headline', defaultPreset.headlines.length > 0 ? defaultPreset.headlines : ['']);
-      this.renderVariations('bulkLaunchBodiesList', 'body', defaultPreset.bodies.length > 0 ? defaultPreset.bodies : ['']);
+      this.renderVariations('bulkLaunchHeadlinesList', 'headline', (defaultPreset.headlines || []).length > 0 ? defaultPreset.headlines : ['']);
+      this.renderVariations('bulkLaunchBodiesList', 'body', (defaultPreset.bodies || []).length > 0 ? defaultPreset.bodies : ['']);
+      this.renderVariations('bulkLaunchDescriptionsList', 'description', (defaultPreset.descriptions || []).length > 0 ? defaultPreset.descriptions : ['']);
+    } else {
+      // Even when override is off, seed empty rows so user can toggle on and see UI
+      this.renderVariations('bulkLaunchDescriptionsList', 'description', ['']);
     }
     if (defaultId) document.getElementById('bulkLaunchPreset').value = defaultId;
     document.getElementById('bulkLaunchModal').classList.remove('hidden');
