@@ -150,13 +150,13 @@ tr:hover td { background: var(--bg-card-hover); }
 .iter-btn.launch:hover { background: #0e5fcc; }
 .iter-btn.download { background: rgba(34,197,94,0.15); color: #22c55e; border: 1px solid rgba(34,197,94,0.3); }
 .iter-btn.download:hover { background: rgba(34,197,94,0.25); }
-.launch-modal { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 24px; max-width: 560px; width: 90%; max-height: 90vh; overflow-y: auto; }
-.launch-modal h3 { margin: 0 0 12px; }
-.launch-modal label { display: block; font-size: 12px; color: var(--text-muted); margin-bottom: 4px; margin-top: 14px; }
-.launch-modal input, .launch-modal select, .launch-modal textarea { width: 100%; background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 8px 10px; border-radius: 6px; font-size: 13px; box-sizing: border-box; }
-.launch-modal textarea { resize: vertical; min-height: 60px; font-family: inherit; }
-.launch-modal .preview-row { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; }
-.launch-modal .preview-row img, .launch-modal .preview-row video { width: 80px; height: 80px; object-fit: cover; border-radius: 6px; background: #000; }
+.launch-modal { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; max-width: 440px; width: 90%; max-height: 86vh; overflow-y: auto; box-shadow: 0 20px 60px rgba(0,0,0,0.6); }
+.launch-modal h3 { margin: 0 0 10px; font-size: 16px; }
+.launch-modal label { display: block; font-size: 11px; color: var(--text-muted); margin-bottom: 3px; margin-top: 10px; text-transform: uppercase; letter-spacing: 0.3px; }
+.launch-modal input, .launch-modal select, .launch-modal textarea { width: 100%; background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 7px 9px; border-radius: 5px; font-size: 13px; box-sizing: border-box; }
+.launch-modal textarea { resize: vertical; min-height: 52px; font-family: inherit; }
+.launch-modal .preview-row { display: flex; gap: 10px; align-items: center; margin-bottom: 6px; }
+.launch-modal .preview-row img, .launch-modal .preview-row video { width: 56px; height: 56px; object-fit: cover; border-radius: 5px; background: #000; }
 .myads-card .meta { padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; border-top: 1px solid var(--border); }
 .myads-card .meta .name { font-weight: 600; font-size: 12px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .myads-card .meta .tag { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
@@ -178,6 +178,8 @@ tr:hover td { background: var(--bg-card-hover); }
 .bulk-bar .actions { display: flex; gap: 8px; }
 .bulk-bar .btn-bulk-del { background: rgba(239,68,68,0.15); color: #fca5a5; border: 1px solid #ef4444; padding: 7px 14px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; }
 .bulk-bar .btn-bulk-del:hover { background: rgba(239,68,68,0.3); color: #fff; }
+.bulk-bar .btn-bulk-dl { background: rgba(34,197,94,0.15); color: #86efac; border: 1px solid #22c55e; padding: 7px 14px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; }
+.bulk-bar .btn-bulk-dl:hover { background: rgba(34,197,94,0.3); color: #fff; }
 .bulk-bar .btn-clear { background: transparent; color: var(--text-muted); border: 1px solid var(--border); padding: 7px 14px; border-radius: 6px; font-size: 13px; cursor: pointer; font-family: inherit; }
 .bulk-bar .btn-clear:hover { color: var(--text); border-color: var(--text-muted); }
 
@@ -1611,23 +1613,38 @@ const SheetView = {
     this.renderBulkBar();
   },
 
-  // Download a generated creative file directly from Drive.
+  // Build a filesystem-safe filename from the displayed name.
+  // Mirrors what the dashboard shows on the card so downloads are recognizable.
+  creativeFilename(c) {
+    const ext = c.video_url ? 'mp4' : 'png';
+    const raw = (c.display_name || c.headline || c.text_overlay || c.creative_id || 'creative').toString();
+    // Strip control chars + filesystem-illegal chars, collapse whitespace, trim length
+    const safe = raw
+      .replace(/[\x00-\x1f]/g, '')
+      .replace(/[\/\\:*?"<>|]/g, '-')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 100) || 'creative';
+    return `${safe}.${ext}`;
+  },
+
+  // Extract the Drive file ID from any of our stored URL formats.
+  driveIdFromCreative(c) {
+    const url = c.video_url || c.generated_image_url || '';
+    const m = url.match(/\/d\/([A-Za-z0-9_-]+)/) || url.match(/[?&]id=([A-Za-z0-9_-]+)/);
+    return m ? m[1] : null;
+  },
+
+  // Download a single generated creative file directly from Drive.
   // Uses Drive's `uc?export=download&id=<id>` endpoint which streams the raw bytes.
   downloadCreative(creativeId) {
     const data = DataService.cache;
     const c = (data.generated || []).find(g => g.creative_id === creativeId);
     if (!c) { Toast.show('Creative not found', 'error'); return; }
-    const url = c.video_url || c.generated_image_url || '';
-    const m = url.match(/\/d\/([A-Za-z0-9_-]+)/) || url.match(/[?&]id=([A-Za-z0-9_-]+)/);
-    if (!m) { Toast.show('No Drive file ID found on this creative', 'error'); return; }
-    const driveId = m[1];
-    const ext = c.video_url ? 'mp4' : 'png';
-    const filename = `${creativeId}.${ext}`;
+    const driveId = this.driveIdFromCreative(c);
+    if (!driveId) { Toast.show('No Drive file ID found on this creative', 'error'); return; }
+    const filename = this.creativeFilename(c);
     const dlUrl = `https://drive.google.com/uc?export=download&id=${driveId}`;
-
-    // Force a download by anchoring with a download attribute. Drive returns
-    // the file directly for files under ~25MB; larger files redirect to a
-    // confirm page (rare for ad creatives).
     const a = document.createElement('a');
     a.href = dlUrl;
     a.download = filename;
@@ -1637,6 +1654,41 @@ const SheetView = {
     a.click();
     document.body.removeChild(a);
     Toast.show(`Downloading ${filename}`, 'info');
+  },
+
+  // Bulk download all selected generated creatives. Browsers will pop up an
+  // 'Allow multiple downloads' permission the first time. We stagger triggers
+  // by 250ms so the browser doesn't merge them.
+  async bulkDownload() {
+    const ids = Array.from(this.selectedIds);
+    if (ids.length === 0) return;
+    const data = DataService.cache;
+    const map = Object.fromEntries((data.generated || []).map(g => [g.creative_id, g]));
+    const eligible = ids.map(id => map[id]).filter(c => c && this.driveIdFromCreative(c));
+    const skipped = ids.length - eligible.length;
+
+    if (eligible.length === 0) {
+      Toast.show('None of the selected items have downloadable media', 'error');
+      return;
+    }
+    Toast.show(`Starting download of ${eligible.length} creative${eligible.length > 1 ? 's' : ''}${skipped > 0 ? ` (${skipped} skipped — no media)` : ''}…`, 'info');
+
+    for (let i = 0; i < eligible.length; i++) {
+      const c = eligible[i];
+      const driveId = this.driveIdFromCreative(c);
+      const filename = this.creativeFilename(c);
+      const a = document.createElement('a');
+      a.href = `https://drive.google.com/uc?export=download&id=${driveId}`;
+      a.download = filename;
+      a.target = '_blank';
+      a.rel = 'noopener';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      // Stagger triggers so the browser actually queues each one separately
+      await new Promise(r => setTimeout(r, 350));
+    }
+    Toast.show(`Triggered ${eligible.length} download${eligible.length > 1 ? 's' : ''}. Check your downloads folder.`, 'success');
   },
 
   // Replace a broken <img>/<video> thumb with a styled letter placeholder.
@@ -1696,9 +1748,13 @@ const SheetView = {
     if (n === 0) { el.style.display = 'none'; el.innerHTML = ''; return; }
     el.style.display = 'flex';
     const tabLabel = this.currentTab === 'generated' ? 'creatives' : 'ads';
+    const downloadBtn = this.currentTab === 'generated'
+      ? `<button class="btn-bulk-dl" onclick="SheetView.bulkDownload()">↓ Download ${n}</button>`
+      : '';
     el.innerHTML = `
       <div class="count">${n} ${tabLabel} selected</div>
       <div class="actions">
+        ${downloadBtn}
         <button class="btn-bulk-del" onclick="SheetView.bulkDelete()">Delete ${n} ${tabLabel}</button>
         <button class="btn-clear" onclick="SheetView.clearSelection()">Clear selection</button>
       </div>
