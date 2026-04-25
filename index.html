@@ -157,9 +157,16 @@ tr:hover td { background: var(--bg-card-hover); }
 .launch-modal textarea { resize: vertical; min-height: 52px; font-family: inherit; }
 .launch-modal .preview-row { display: flex; gap: 10px; align-items: center; margin-bottom: 6px; }
 .launch-modal .preview-row img, .launch-modal .preview-row video { width: 56px; height: 56px; object-fit: cover; border-radius: 5px; background: #000; }
-.variation-row { display: flex; gap: 6px; margin-bottom: 4px; align-items: flex-start; }
-.variation-row input, .variation-row textarea { flex: 1; background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 7px 9px; border-radius: 5px; font-size: 13px; box-sizing: border-box; font-family: inherit; }
-.variation-row textarea { resize: vertical; min-height: 52px; }
+.variation-row { display: flex; gap: 6px; margin-bottom: 6px; align-items: flex-start; width: 100%; }
+.variation-row input, .variation-row textarea { flex: 1 1 auto; min-width: 0; width: auto; max-width: none; background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 9px 11px; border-radius: 5px; font-size: 13px; box-sizing: border-box; font-family: inherit; line-height: 1.5; }
+.variation-row input { min-height: 40px; }
+.variation-row textarea { resize: vertical; min-height: 110px; }
+.variation-row .var-num { padding-top: 12px; }
+.variation-row .var-rm { height: 40px; }
+/* Settings preset editor — let inputs span full card width instead of 300px cap */
+#preset-name, #preset-adset-id, #preset-link, #preset-cta, #preset-utm, #preset-headlines, #preset-bodies,
+#presetHeadlinesList, #presetBodiesList { width: 100% !important; max-width: 100% !important; }
+.setting-row #preset-name, .setting-row #preset-adset-id, .setting-row #preset-link { width: 100% !important; }
 .variation-row .var-num { width: 18px; flex: 0 0 18px; color: var(--text-muted); font-size: 11px; padding-top: 9px; text-align: center; }
 .variation-row .var-rm { background: transparent; color: var(--text-muted); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; padding: 0 8px; font-size: 14px; line-height: 1; height: 32px; }
 .variation-row .var-rm:hover { color: var(--danger); border-color: var(--danger); }
