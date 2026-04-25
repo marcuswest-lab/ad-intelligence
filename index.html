@@ -123,7 +123,7 @@ tr:hover td { background: var(--bg-card-hover); }
 @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
 
 /* Modal */
-.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 999; display: flex; align-items: center; justify-content: center; }
+.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.85); backdrop-filter: blur(4px); z-index: 999; display: flex; align-items: center; justify-content: center; }
 .modal { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; max-width: 440px; width: 90%; }
 .modal h3 { font-size: 18px; margin-bottom: 12px; }
 .modal p { font-size: 14px; color: var(--text-dim); margin-bottom: 20px; line-height: 1.5; }
@@ -148,6 +148,8 @@ tr:hover td { background: var(--bg-card-hover); }
 .myads-card .thumb-placeholder { display: flex; align-items: center; justify-content: center; font-size: 56px; font-weight: 700; color: var(--text-muted); background: linear-gradient(135deg, rgba(99,102,241,0.15), rgba(168,85,247,0.15)); }
 .iter-btn.launch { background: #1877f2; color: white; border: none; }
 .iter-btn.launch:hover { background: #0e5fcc; }
+.iter-btn.download { background: rgba(34,197,94,0.15); color: #22c55e; border: 1px solid rgba(34,197,94,0.3); }
+.iter-btn.download:hover { background: rgba(34,197,94,0.25); }
 .launch-modal { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 24px; max-width: 560px; width: 90%; max-height: 90vh; overflow-y: auto; }
 .launch-modal h3 { margin: 0 0 12px; }
 .launch-modal label { display: block; font-size: 12px; color: var(--text-muted); margin-bottom: 4px; margin-top: 14px; }
@@ -1561,13 +1563,17 @@ const SheetView = {
         : canDeleteScraped
           ? `<button class="iter-btn danger" onclick="SheetView.deleteScrapedAd('${esc(srcId)}')">Delete</button>`
           : '';
-      // "Launch to Meta" only on Generated Creatives tab (the ones we actually have media files for)
+      // "Launch to Meta" + "Download" only on Generated Creatives tab (the ones we actually have media files for)
       const launchBtn = (this.currentTab === 'generated' && srcId)
         ? `<button class="iter-btn launch" onclick="MetaLauncher.open('${esc(srcId)}')">↗ Launch to Meta</button>`
+        : '';
+      const downloadBtn = (this.currentTab === 'generated' && srcId && (r.generated_image_url || r.video_url))
+        ? `<button class="iter-btn download" onclick="SheetView.downloadCreative('${esc(srcId)}')">↓ Download</button>`
         : '';
       const actionsHtml = iterateAction
         ? `<div class="actions">
              ${launchBtn}
+             ${downloadBtn}
              <button class="iter-btn primary" onclick="SheetView.iterateFrom('${iterateAction.kind}','${esc(iterateAction.id)}', 3)">Iterate (3 variations)</button>
              <button class="iter-btn secondary" onclick="SheetView.iterateFrom('${iterateAction.kind}','${esc(iterateAction.id)}', 1)">Quick test (1)</button>
              ${deleteBtn}
@@ -1603,6 +1609,34 @@ const SheetView = {
       filtersEl2.innerHTML += selectAllBtn;
     }
     this.renderBulkBar();
+  },
+
+  // Download a generated creative file directly from Drive.
+  // Uses Drive's `uc?export=download&id=<id>` endpoint which streams the raw bytes.
+  downloadCreative(creativeId) {
+    const data = DataService.cache;
+    const c = (data.generated || []).find(g => g.creative_id === creativeId);
+    if (!c) { Toast.show('Creative not found', 'error'); return; }
+    const url = c.video_url || c.generated_image_url || '';
+    const m = url.match(/\/d\/([A-Za-z0-9_-]+)/) || url.match(/[?&]id=([A-Za-z0-9_-]+)/);
+    if (!m) { Toast.show('No Drive file ID found on this creative', 'error'); return; }
+    const driveId = m[1];
+    const ext = c.video_url ? 'mp4' : 'png';
+    const filename = `${creativeId}.${ext}`;
+    const dlUrl = `https://drive.google.com/uc?export=download&id=${driveId}`;
+
+    // Force a download by anchoring with a download attribute. Drive returns
+    // the file directly for files under ~25MB; larger files redirect to a
+    // confirm page (rare for ad creatives).
+    const a = document.createElement('a');
+    a.href = dlUrl;
+    a.download = filename;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    Toast.show(`Downloading ${filename}`, 'info');
   },
 
   // Replace a broken <img>/<video> thumb with a styled letter placeholder.
