@@ -1478,19 +1478,22 @@ const SheetView = {
 
       // Decide preview element:
       //   - Drive: use thumbnail API
-      //   - video_url present (and no usable image): render <video> (autoplay muted)
-      //   - fbcdn/external image: use <img> with no-referrer policy and onerror fallback
-      //   - nothing usable: styled placeholder with page name
-      const isVideo = (!imgUrl || imgUrl.endsWith('.mp4') || imgUrl.includes('/video/')) && videoUrl && /\.mp4($|\?)/i.test(videoUrl);
-      const placeholderInitial = (r.page_name || r.headline || 'Ad').toString().trim().charAt(0).toUpperCase() || '?';
-      const placeholderHtml = `<div class="thumb thumb-placeholder" title="${esc(r.page_name || 'preview unavailable')}">${esc(placeholderInitial)}</div>`;
+      //   - video_url present (and no usable image): render <video> (autoplay muted on hover)
+      //   - fbcdn/external image: use <img> with no-referrer policy and fallback
+      //   - nothing usable: styled placeholder with page-name initial
+      const hasVideo = videoUrl && /\.mp4($|\?)/i.test(videoUrl);
+      const hasUsableImg = thumbSrc && thumbSrc.startsWith('http');
+      const isVideoOnly = hasVideo && !hasUsableImg;
+      const initialChar = ((r.page_name || r.headline || 'Ad').toString().trim().charAt(0) || '?').toUpperCase();
+      const placeholderTitle = esc(r.page_name || 'preview unavailable');
+
       let previewHtml;
-      if (isVideo) {
-        previewHtml = `<video class="thumb" src="${esc(videoUrl)}" muted playsinline loop preload="metadata" onmouseover="this.play()" onmouseout="this.pause()" onerror="this.outerHTML='${placeholderHtml.replace(/'/g,"\\'")}'"></video>`;
-      } else if (thumbSrc && thumbSrc.startsWith('http')) {
-        previewHtml = `<img class="thumb" src="${esc(thumbSrc)}" alt="${esc(name)}" loading="lazy" referrerpolicy="no-referrer" onerror="this.outerHTML='${placeholderHtml.replace(/'/g,"\\'")}'">`;
+      if (isVideoOnly) {
+        previewHtml = `<video class="thumb" src="${esc(videoUrl)}" muted playsinline loop preload="metadata" data-fallback-initial="${esc(initialChar)}" data-fallback-title="${placeholderTitle}" onmouseover="this.play()" onmouseout="this.pause()" onerror="SheetView.thumbFallback(this)"></video>`;
+      } else if (hasUsableImg) {
+        previewHtml = `<img class="thumb" src="${esc(thumbSrc)}" alt="${esc(name)}" loading="lazy" referrerpolicy="no-referrer" data-fallback-initial="${esc(initialChar)}" data-fallback-title="${placeholderTitle}" onerror="SheetView.thumbFallback(this)">`;
       } else {
-        previewHtml = placeholderHtml;
+        previewHtml = `<div class="thumb thumb-placeholder" title="${placeholderTitle}">${esc(initialChar)}</div>`;
       }
 
       // Delete on Generated Creatives = full delete (Drive + sheet row)
@@ -1539,6 +1542,17 @@ const SheetView = {
       filtersEl2.innerHTML += selectAllBtn;
     }
     this.renderBulkBar();
+  },
+
+  // Replace a broken <img>/<video> thumb with a styled letter placeholder.
+  thumbFallback(el) {
+    const init = el.getAttribute('data-fallback-initial') || '?';
+    const title = el.getAttribute('data-fallback-title') || '';
+    const div = document.createElement('div');
+    div.className = 'thumb thumb-placeholder';
+    div.title = title;
+    div.textContent = init;
+    if (el.parentNode) el.parentNode.replaceChild(div, el);
   },
 
   iterateFrom(kind, id, iterations) {
