@@ -1268,11 +1268,14 @@ const SheetView = {
       key: 'scraped',
       supportsToggle: true,
       defaultView: 'list',
-      cols: ['page_name', 'headline', 'ad_text', 'media_type', 'is_active', 'days_running', 'impressions_lower', 'start_date', 'scraped_at'],
-      display: ['Page', 'Headline', 'Ad Text', 'Type', 'Active', 'Days', 'Impressions', 'Started', 'Scraped'],
-      filters: ['all', 'active', 'inactive', 'image', 'video'],
+      cols: ['page_name', 'headline', 'ad_text', 'media_type', 'is_active', 'days_running', 'source', 'start_date', 'scraped_at'],
+      display: ['Page', 'Headline', 'Ad Text', 'Type', 'Active', 'Days', 'Source', 'Started', 'Scraped'],
+      filters: ['all', 'apify', 'foreplay', 'mine', 'active', 'image', 'video'],
       filterCol: 'is_active',
       filterLogic(row, filter) {
+        if (filter === 'apify')   return (row['source'] || '') === 'meta_ad_library_apify';
+        if (filter === 'foreplay')return (row['source'] || '') === 'foreplay';
+        if (filter === 'mine')    return (row['source'] || '') === 'my-ad';
         if (filter === 'active') return (row['is_active'] || '').toLowerCase() === 'true';
         if (filter === 'inactive') return (row['is_active'] || '').toLowerCase() !== 'true';
         if (filter === 'image') return (row['media_type'] || '').toLowerCase() === 'image';
@@ -1416,15 +1419,22 @@ const SheetView = {
       const thumbSrc = driveId ? `https://drive.google.com/thumbnail?id=${driveId}&sz=w512` : imgUrl;
       const openUrl = driveId ? `https://drive.google.com/file/d/${driveId}/view` : (imgUrl || '#');
 
-      // Delete is only available on Generated Creatives (user's own renders that live in Drive + Sheet)
-      const canDelete = this.currentTab === 'generated' && srcId;
+      // Delete on Generated Creatives = full delete (Drive + sheet row)
+      // Delete on Scraped Ads / My Ads = remove from sheet (Drive only deleted for source=my-ad)
+      const canDeleteGen = this.currentTab === 'generated' && srcId;
+      const canDeleteScraped = (this.currentTab === 'scraped' || this.currentTab === 'myads') && srcId;
+      const deleteBtn = canDeleteGen
+        ? `<button class="iter-btn danger" onclick="SheetView.deleteCreative('${esc(srcId)}')">Delete</button>`
+        : canDeleteScraped
+          ? `<button class="iter-btn danger" onclick="SheetView.deleteScrapedAd('${esc(srcId)}')">Delete</button>`
+          : '';
       const actionsHtml = iterateAction
         ? `<div class="actions">
              <button class="iter-btn primary" onclick="SheetView.iterateFrom('${iterateAction.kind}','${esc(iterateAction.id)}', 3)">Iterate (3 variations)</button>
              <button class="iter-btn secondary" onclick="SheetView.iterateFrom('${iterateAction.kind}','${esc(iterateAction.id)}', 1)">Quick test (1)</button>
-             ${canDelete ? `<button class="iter-btn danger" onclick="SheetView.deleteCreative('${esc(srcId)}')">Delete</button>` : ''}
+             ${deleteBtn}
            </div>`
-        : (canDelete ? `<div class="actions"><button class="iter-btn danger" onclick="SheetView.deleteCreative('${esc(srcId)}')">Delete</button></div>` : '');
+        : (deleteBtn ? `<div class="actions">${deleteBtn}</div>` : '');
 
       return `
         <div class="myads-card">
@@ -1446,6 +1456,31 @@ const SheetView = {
   iterateFrom(kind, id, iterations) {
     if (kind === 'scraped') this.iterateScraped(id, iterations);
     else this.iterateCreative(id, iterations);
+  },
+
+  deleteScrapedAd(adId) {
+    if (!adId) { Toast.show('No ad_id', 'error'); return; }
+    Modal.show(
+      'Delete scraped ad?',
+      `Remove ${adId} from the Scraped Ads sheet. (For your own uploaded ads, the Drive image will also be removed.)`,
+      () => {
+        Toast.show(`Deleting ${adId.slice(-20)}…`, 'info');
+        fetch(`${CONFIG.n8nUrl}/webhook/marketcall-sales-log`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ _magic: 'DELETE_SCRAPED_AD', ad_id: adId })
+        })
+          .then(r => r.json().catch(() => ({})))
+          .then(j => {
+            if (j && j.deleted) {
+              Toast.show(`Deleted ${adId.slice(-20)}`, 'success');
+              setTimeout(() => App.refresh(), 1500);
+            } else {
+              Toast.show(`Delete returned: ${JSON.stringify(j).slice(0, 100)}`, 'error');
+            }
+          })
+          .catch(e => Toast.show(`Delete error: ${e.message}`, 'error'));
+      }
+    );
   },
 
   deleteCreative(creativeId) {
