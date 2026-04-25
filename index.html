@@ -490,13 +490,13 @@ tbody tr.selected { background: rgba(99,102,241,0.08); }
       </div>
 
       <div class="setting-row" style="flex-direction:column;align-items:stretch;gap:6px;margin-top:12px">
-        <label style="font-weight:600">Headlines (one per line, max 5)</label>
-        <textarea id="preset-headlines" style="width:100%;min-height:80px" placeholder="Optional — leave blank to use each creative's own headline"></textarea>
+        <label style="font-weight:600">Headlines <span id="preset-headlines-count" style="color:var(--text-muted);font-weight:400">— 0 detected (one per line, max 5)</span></label>
+        <textarea id="preset-headlines" style="width:100%;min-height:120px" placeholder="Type each headline on its own line:&#10;&#10;¿Tienes deuda de tarjetas?&#10;Reduce tu deuda hasta 60%&#10;Ayuda con deudas — gratis" oninput="LaunchPresets.updateCounts()"></textarea>
       </div>
 
       <div class="setting-row" style="flex-direction:column;align-items:stretch;gap:6px;margin-top:12px">
-        <label style="font-weight:600">Primary Text / Bodies (separate with --- on its own line, max 5)</label>
-        <textarea id="preset-bodies" style="width:100%;min-height:120px" placeholder="Optional — leave blank to use each creative's own body. Separate variations with a line containing only ---"></textarea>
+        <label style="font-weight:600">Primary Text / Bodies <span id="preset-bodies-count" style="color:var(--text-muted);font-weight:400">— 0 detected (separate with blank line, max 5)</span></label>
+        <textarea id="preset-bodies" style="width:100%;min-height:200px" placeholder="Type each body separated by a BLANK LINE:&#10;&#10;Miles de personas han reducido sus deudas hasta 60%. Descubre si calificas hoy.&#10;&#10;¿Tarjetas de crédito te están agobiando? Hablamos español. Llama gratis.&#10;&#10;Programa Fresh Start del IRS. Si tienes deuda de $7,500+, podemos ayudarte." oninput="LaunchPresets.updateCounts()"></textarea>
       </div>
 
       <div style="display:flex;gap:8px;margin-top:14px;align-items:center">
@@ -2521,7 +2521,46 @@ const LaunchPresets = {
     set('preset-cta', p.cta || 'LEARN_MORE');
     set('preset-utm', p.utm_template);
     set('preset-headlines', (p.headlines || []).join('\n'));
-    set('preset-bodies', (p.bodies || []).join('\n---\n'));
+    set('preset-bodies', (p.bodies || []).join('\n\n'));
+    this.updateCounts();
+  },
+
+  // Parse headlines: one per non-empty line, max 5
+  parseHeadlines(raw) {
+    return (raw || '').split('\n').map(s => s.trim()).filter(Boolean).slice(0, 5);
+  },
+
+  // Parse bodies: split on one-or-more blank lines (paragraphs), max 5
+  parseBodies(raw) {
+    return (raw || '')
+      .split(/\n\s*\n+/)
+      .map(s => s.trim())
+      .filter(Boolean)
+      .slice(0, 5);
+  },
+
+  // Live counters in the Settings editor
+  updateCounts() {
+    const hEl = document.getElementById('preset-headlines');
+    const bEl = document.getElementById('preset-bodies');
+    if (hEl) {
+      const hCount = this.parseHeadlines(hEl.value).length;
+      const hLabel = document.getElementById('preset-headlines-count');
+      if (hLabel) {
+        const over = hCount > 5;
+        const used = Math.min(hCount, 5);
+        hLabel.innerHTML = `— <strong style="color:${over ? 'var(--warning)' : 'var(--text)'}">${used} detected${over ? ' (only first 5 used)' : ''}</strong> (one per line, max 5)`;
+      }
+    }
+    if (bEl) {
+      const bCount = this.parseBodies(bEl.value).length;
+      const bLabel = document.getElementById('preset-bodies-count');
+      if (bLabel) {
+        const over = bCount > 5;
+        const used = Math.min(bCount, 5);
+        bLabel.innerHTML = `— <strong style="color:${over ? 'var(--warning)' : 'var(--text)'}">${used} detected${over ? ' (only first 5 used)' : ''}</strong> (separate with blank line, max 5)`;
+      }
+    }
   },
 
   savePreset() {
@@ -2533,10 +2572,8 @@ const LaunchPresets = {
       link_url: document.getElementById('preset-link').value.trim(),
       cta: document.getElementById('preset-cta').value,
       utm_template: document.getElementById('preset-utm').value,
-      headlines: document.getElementById('preset-headlines').value
-        .split('\n').map(s => s.trim()).filter(Boolean).slice(0, 5),
-      bodies: document.getElementById('preset-bodies').value
-        .split(/^---\s*$/m).map(s => s.trim()).filter(Boolean).slice(0, 5)
+      headlines: this.parseHeadlines(document.getElementById('preset-headlines').value),
+      bodies: this.parseBodies(document.getElementById('preset-bodies').value)
     };
     const s = this.store();
     if (!s.presets) s.presets = {};
