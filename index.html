@@ -146,6 +146,9 @@ tr:hover td { background: var(--bg-card-hover); }
 .myads-card .thumb { width: 100%; aspect-ratio: 1/1; object-fit: cover; background: var(--bg); display: block; cursor: pointer; }
 .myads-card video.thumb { background: #000; }
 .myads-card .thumb-placeholder { display: flex; align-items: center; justify-content: center; font-size: 56px; font-weight: 700; color: var(--text-muted); background: linear-gradient(135deg, rgba(99,102,241,0.15), rgba(168,85,247,0.15)); }
+.myads-card .format-badge { position: absolute; top: 8px; right: 8px; z-index: 5; background: rgba(0,0,0,0.78); color: #fff; border: 1px solid rgba(255,255,255,0.18); border-radius: 5px; padding: 3px 7px; font-size: 11px; font-weight: 600; cursor: pointer; text-transform: uppercase; letter-spacing: 0.5px; font-family: inherit; appearance: none; -webkit-appearance: none; }
+.myads-card .format-badge:hover { background: rgba(99,102,241,0.85); border-color: var(--accent); }
+.myads-card { position: relative; }
 .iter-btn.launch { background: #1877f2; color: white; border: none; }
 .iter-btn.launch:hover { background: #0e5fcc; }
 .iter-btn.download { background: rgba(34,197,94,0.15); color: #22c55e; border: 1px solid rgba(34,197,94,0.3); }
@@ -1786,9 +1789,17 @@ const SheetView = {
       const selKey = this.bulkKey() === 'creative_id' ? srcId : srcId;
       const isSelected = selKey && this.selectedIds.has(selKey);
       const cbHtml = selKey ? `<input type="checkbox" class="select-cb" ${isSelected ? 'checked' : ''} onclick="event.stopPropagation(); SheetView.toggleSelect('${esc(selKey)}', this.checked); this.closest('.myads-card').classList.toggle('selected', this.checked);">` : '';
+      // Format badge (Generated Creatives only — auto-detected, click to override)
+      const fmtBadge = (this.currentTab === 'generated' && srcId)
+        ? `<select class="format-badge" data-cid="${esc(srcId)}" onchange="event.stopPropagation(); SheetView.updateCreativeFormat('${esc(srcId)}', this.value)" onclick="event.stopPropagation()">
+             ${['photo','ugc','quiz','gmail','reddit','sms','news','carousel','story'].map(f =>
+               `<option value="${f}"${(r.creative_format||'photo')===f?' selected':''}>${f}</option>`).join('')}
+           </select>`
+        : '';
       return `
         <div class="myads-card${isSelected ? ' selected' : ''}">
           ${cbHtml}
+          ${fmtBadge}
           <a href="${openUrl}" target="_blank" style="display:block">
             ${previewHtml}
           </a>
@@ -1905,6 +1916,24 @@ const SheetView = {
   },
 
   // Replace a broken <img>/<video> thumb with a styled letter placeholder.
+  // Persist a manual creative_format change to the sheet + rebuild display_name
+  async updateCreativeFormat(creativeId, newFormat) {
+    try {
+      const r = await fetch(`${CONFIG.n8nUrl}/webhook/update-creative-format`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ creative_id: creativeId, format: newFormat })
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      Toast.show(`Format set to ${newFormat} → ${data.new_display_name || 'updated'}`, 'success');
+      // Refresh local cache so the next render reflects new name+format
+      setTimeout(() => App.refresh(), 1500);
+    } catch (e) {
+      Toast.show('Format update failed: ' + e.message, 'error');
+    }
+  },
+
   thumbFallback(el) {
     const init = el.getAttribute('data-fallback-initial') || '?';
     const title = el.getAttribute('data-fallback-title') || '';
