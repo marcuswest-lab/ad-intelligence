@@ -2976,25 +2976,52 @@ const MetaLauncher = {
     statusEl.textContent = `Uploading ${n} creatives sequentially. Do not close this window.`;
     resultsEl.innerHTML = '';
 
-    const payload = {
-      creative_ids: this.bulkSelected.map(c => c.creative_id),
-      adset_id: document.getElementById('bulkLaunchAdset').value,
-      link_url: document.getElementById('bulkLaunchLink').value,
-      cta: document.getElementById('bulkLaunchCta').value,
-      utm_template: document.getElementById('bulkLaunchUtm').value
-    };
-    if (document.getElementById('bulkLaunchOverrideText').checked) {
-      const headlines = this.getVariations('bulkLaunchHeadlinesList');
-      const bodies = this.getVariations('bulkLaunchBodiesList');
-      const descriptions = this.getVariations('bulkLaunchDescriptionsList');
-      if (headlines.length === 0) {
+    let adsetId = document.getElementById('bulkLaunchAdset').value;
+    const overrideOn = document.getElementById('bulkLaunchOverrideText').checked;
+    let bulkHeadlines = [], bulkBodies = [], bulkDescriptions = [];
+    if (overrideOn) {
+      bulkHeadlines = this.getVariations('bulkLaunchHeadlinesList');
+      bulkBodies = this.getVariations('bulkLaunchBodiesList');
+      bulkDescriptions = this.getVariations('bulkLaunchDescriptionsList');
+      if (bulkHeadlines.length === 0) {
         Toast.show('At least one headline is required when overriding', 'error');
         btn.disabled = false; btn.textContent = `Launch ${n} as PAUSED`;
         return;
       }
-      payload.headlines = headlines;
-      payload.bodies = bodies;
-      payload.descriptions = descriptions;
+    }
+
+    // Bulk launch ALWAYS goes into a fresh cloned ad set so we never hit the
+    // one-asset_feed_spec-ad-per-ad-set limit and so the new batch is isolated
+    // from existing ads in the source ad set.
+    statusEl.textContent = 'Cloning ad set so this batch lives in its own ad set…';
+    try {
+      const cloneResp = await fetch(`${CONFIG.n8nUrl}/webhook/clone-adset`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ adset_id: adsetId, suffix: ` | Batch-${new Date().toISOString().slice(0,10)}` })
+      });
+      const cloneResult = await cloneResp.json();
+      if (!cloneResult.ok) throw new Error(cloneResult.error || 'clone failed');
+      adsetId = cloneResult.new_adset_id;
+      statusEl.textContent = `Cloned ad set → ${adsetId}. Uploading ${n} creatives…`;
+    } catch (e) {
+      statusEl.textContent = '✗ Ad set clone failed: ' + e.message;
+      Toast.show('Clone failed: ' + e.message, 'error');
+      btn.disabled = false; btn.textContent = `Launch ${n} as PAUSED`;
+      return;
+    }
+
+    const payload = {
+      creative_ids: this.bulkSelected.map(c => c.creative_id),
+      adset_id: adsetId,
+      link_url: document.getElementById('bulkLaunchLink').value,
+      cta: document.getElementById('bulkLaunchCta').value,
+      utm_template: document.getElementById('bulkLaunchUtm').value
+    };
+    if (overrideOn) {
+      payload.headlines = bulkHeadlines;
+      payload.bodies = bulkBodies;
+      payload.descriptions = bulkDescriptions;
     }
 
     try {
@@ -3193,9 +3220,34 @@ const MetaLauncher = {
       btn.disabled = false; btn.textContent = 'Launch as PAUSED';
       return;
     }
+    let adsetId = document.getElementById('launchAdset').value;
+    const isMulti = headlines.length > 1 || bodies.length > 1 || descriptions.filter(d => d).length > 1;
+
+    // If multi-variation, clone the ad set first so we don't hit Meta's
+    // "one asset_feed_spec ad per ad set" constraint.
+    if (isMulti) {
+      statusEl.textContent = 'Cloning ad set (multi-variation requires its own ad set)…';
+      try {
+        const cloneResp = await fetch(`${CONFIG.n8nUrl}/webhook/clone-adset`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ adset_id: adsetId })
+        });
+        const cloneResult = await cloneResp.json();
+        if (!cloneResult.ok) throw new Error(cloneResult.error || 'clone failed');
+        adsetId = cloneResult.new_adset_id;
+        statusEl.textContent = `Cloned ad set → ${adsetId}. Uploading creative + creating ad…`;
+      } catch (e) {
+        statusEl.textContent = '✗ Ad set clone failed: ' + e.message;
+        Toast.show('Clone failed: ' + e.message, 'error');
+        btn.disabled = false; btn.textContent = 'Launch as PAUSED';
+        return;
+      }
+    }
+
     const payload = {
       creative_id: this.currentCreative.creative_id,
-      adset_id: document.getElementById('launchAdset').value,
+      adset_id: adsetId,
       name: document.getElementById('launchAdName').value,
       headlines: headlines,
       bodies: bodies,
@@ -3215,10 +3267,10 @@ const MetaLauncher = {
       if (!r.ok || !result.ok) {
         throw new Error(result.error || result.message || `HTTP ${r.status}`);
       }
-      statusEl.innerHTML = `✓ Launched as PAUSED. <a href="${result.ads_manager_url}" target="_blank" style="color:#1877f2">Open in Ads Manager</a>`;
+      const cloneNote = isMulti ? ' <em style="color:var(--text-muted)">(in cloned ad set)</em>' : '';
+      statusEl.innerHTML = `✓ Launched as PAUSED.${cloneNote} <a href="${result.ads_manager_url}" target="_blank" style="color:#1877f2">Open in Ads Manager</a>`;
       Toast.show('Ad launched as PAUSED', 'success');
       btn.textContent = 'Done';
-      // Auto-close after 5s
       setTimeout(() => this.close(), 6000);
     } catch (e) {
       statusEl.textContent = '✗ ' + (e.message || 'Launch failed');
