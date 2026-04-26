@@ -1815,15 +1815,16 @@ const SheetView = {
   },
 
   // Build a filesystem-safe filename from the displayed name.
-  // Mirrors what the dashboard shows on the card so downloads are recognizable.
+  // Strips the leading YYMMDD- date prefix so the unique identifier leads.
   creativeFilename(c) {
     const ext = c.video_url ? 'mp4' : 'png';
     const raw = (c.display_name || c.headline || c.text_overlay || c.creative_id || 'creative').toString();
-    // Strip control chars + filesystem-illegal chars, collapse whitespace, trim length
     const safe = raw
+      .replace(/^\d{6}-/, '')         // drop YYMMDD- prefix
       .replace(/[\x00-\x1f]/g, '')
       .replace(/[\/\\:*?"<>|]/g, '-')
       .replace(/\s+/g, ' ')
+      .replace(/-+$/, '')
       .trim()
       .slice(0, 100) || 'creative';
     return `${safe}.${ext}`;
@@ -2724,7 +2725,7 @@ const MetaLauncher = {
 
     document.getElementById('launchCreativeName').textContent = creative.display_name || creative.headline || creativeId;
     document.getElementById('launchCreativeId').textContent = creativeId;
-    document.getElementById('launchAdName').value = (creative.display_name || creative.headline || creativeId).slice(0, 80);
+    document.getElementById('launchAdName').value = MetaLauncher.suggestedAdName(creative).slice(0, 80);
 
     // Headlines/bodies: prefer default preset, then creative's own copy
     const presetHeadlines = (defaultPreset && defaultPreset.headlines && defaultPreset.headlines.length > 0) ? defaultPreset.headlines : null;
@@ -3007,6 +3008,14 @@ const MetaLauncher = {
 
   // Default UTM template — user's preset.
   DEFAULT_UTM: 'utm_medium=facebook&utm_campaign={{campaign.name}}&utm_adset={{adset.name}}&utm_ad={{ad.name}}&utm_placement={{placement}}&utm_campaignid={{campaign.id}}&utm_adsetid={{adset.id}}&utm_adid={{ad.id}}',
+
+  // Build a clean ad-name suggestion from a creative row.
+  // Strips the leading YYMMDD- date prefix that the generator adds, so the
+  // unique short-id + hook leads instead of the date.
+  suggestedAdName(c) {
+    const raw = (c.display_name || c.headline || c.creative_id || 'creative').toString();
+    return raw.replace(/^\d{6}-/, '').replace(/-+$/, '');
+  },
 
   // ----- Variation row helpers (single launch modal) -----
   renderVariations(containerId, kind, values) {
