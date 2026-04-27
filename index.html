@@ -2013,9 +2013,32 @@ const SheetView = {
     if (n === 0) return;
     const ids = Array.from(this.selectedIds);
     const tab = this.currentTab;
+
+    // Build a preview list of what's about to be deleted so accidents are obvious
+    const data = DataService.cache;
+    const sourceList = tab === 'generated' ? (data.generated || []) : (data.scraped || []);
+    const idKey = tab === 'generated' ? 'creative_id' : 'ad_id';
+    const map = Object.fromEntries(sourceList.map(r => [r[idKey], r]));
+    const previewItems = ids.slice(0, 10).map(id => {
+      const r = map[id] || {};
+      const name = r.display_name || r.headline || r.page_name || id;
+      return `<li style="padding:4px 0;font-size:12px;color:var(--text-dim)">${String(name).replace(/</g,'&lt;').slice(0,80)}</li>`;
+    }).join('');
+    const moreNote = ids.length > 10 ? `<li style="padding:4px 0;font-size:12px;color:var(--text-muted);font-style:italic">…and ${ids.length - 10} more</li>` : '';
+
+    const fateNote = tab === 'generated'
+      ? '<strong style="color:var(--warning)">Drive files will be moved to Trash</strong> (recoverable for 30 days). Sheet rows will be deleted.'
+      : 'Selected ad rows will be removed from the Scraped Ads sheet.';
+
     Modal.show(
       `Delete ${n} ${tab === 'generated' ? 'creatives' : 'ads'}?`,
-      `This will permanently remove all ${n} selected items from the sheet${tab === 'generated' ? ' AND from Drive' : ''}. Cannot be undone.`,
+      `<div style="text-align:left">
+        <p style="margin:0 0 10px">${fateNote}</p>
+        <p style="margin:0 0 6px;font-size:12px;color:var(--text-muted)">About to delete:</p>
+        <ul style="margin:0;padding-left:18px;max-height:240px;overflow-y:auto;background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:8px 8px 8px 28px">
+          ${previewItems}${moreNote}
+        </ul>
+      </div>`,
       async () => {
         Toast.show(`Deleting ${n} items…`, 'info');
         const endpoint = `${CONFIG.n8nUrl}/webhook/marketcall-sales-log`;
@@ -2473,9 +2496,15 @@ const Settings = {
 // MODAL + TOAST
 // ============================================================
 const Modal = {
+  // msg can be plain text OR HTML markup (auto-detected by leading '<')
   show(title, msg, onConfirm) {
     document.getElementById('modalTitle').textContent = title;
-    document.getElementById('modalMsg').textContent = msg;
+    const msgEl = document.getElementById('modalMsg');
+    if (typeof msg === 'string' && msg.trim().startsWith('<')) {
+      msgEl.innerHTML = msg;
+    } else {
+      msgEl.textContent = msg;
+    }
     const btn = document.getElementById('modalConfirmBtn');
     btn.onclick = () => { this.close(); onConfirm(); };
     document.getElementById('confirmModal').classList.remove('hidden');
