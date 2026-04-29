@@ -1160,16 +1160,23 @@ const Performance = {
     const allCalls = data.calls || [];
     const generated = data.generated || [];
 
-    // Apply global time range + platform filters
+    // Apply global time range + platform filters.
+    // STRICT attribution: a call counts under Meta only if its source/click id explicitly
+    // identifies Meta; same for NewsBreak. Unattributed ("Unknown") rows only show under "All".
     const showMeta = PlatformFilter.showMeta();
     const showNB = PlatformFilter.showNB();
-    const calls = TimeRange.filterRows(allCalls, 'timestamp').filter(c => {
+    const isMetaCall = c => {
       const src = (c.source || '').toLowerCase();
-      // Calls: Meta = anything that looks like FB; NewsBreak = explicit nb; otherwise count under both
-      const isNB = src.includes('newsbreak') || src.includes('nb') || (c.sub2_nb_click_id || '').length > 0;
-      const isMeta = !isNB && ((c.sub1_fbclid || '').length > 0 || src.includes('facebook') || src.includes('meta') || src.includes('fb'));
-      if (PlatformFilter.current === 'meta') return isMeta || (!isNB && !isMeta); // include unattributed under Meta when Meta-only since campaign is Meta-heavy
-      if (PlatformFilter.current === 'nb') return isNB;
+      return src === 'fb' || src === 'facebook' || src === 'meta' || (c.sub1_fbclid || '').toString().trim().length > 0;
+    };
+    const isNBCall = c => {
+      const src = (c.source || '').toLowerCase();
+      return src.includes('newsbreak') || (c.sub2_nb_click_id || '').toString().trim().length > 0;
+    };
+    const calls = TimeRange.filterRows(allCalls, 'timestamp').filter(c => {
+      if (PlatformFilter.current === 'all') return true;
+      if (PlatformFilter.current === 'meta') return isMetaCall(c);
+      if (PlatformFilter.current === 'nb') return isNBCall(c);
       return true;
     });
     const spendRows = showMeta ? TimeRange.filterRows(data.metaSpend || [], 'day') : [];
