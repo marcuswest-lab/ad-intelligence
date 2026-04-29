@@ -313,6 +313,23 @@ tbody tr.selected { background: rgba(99,102,241,0.08); }
   <!-- ============ DASHBOARD PAGE ============ -->
   <div id="page-dashboard">
 
+  <!-- Global time range selector -->
+  <div class="sheet-tabs" id="timeRangeBar" style="margin-bottom:12px;align-items:center;flex-wrap:wrap;gap:6px">
+    <span style="color:var(--text-muted);font-size:12px;margin-right:4px">Time range:</span>
+    <button class="sheet-tab" onclick="TimeRange.set('7')">7d</button>
+    <button class="sheet-tab" onclick="TimeRange.set('14')">14d</button>
+    <button class="sheet-tab active" onclick="TimeRange.set('30')">30d</button>
+    <button class="sheet-tab" onclick="TimeRange.set('all')">All-Time</button>
+    <button class="sheet-tab" onclick="TimeRange.set('custom')">Custom</button>
+    <span id="timeRangeCustomInputs" style="display:none;gap:6px;align-items:center;margin-left:6px">
+      <input type="date" id="timeRangeStart" style="background:var(--bg-elev);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:12px">
+      <span style="color:var(--text-muted)">→</span>
+      <input type="date" id="timeRangeEnd" style="background:var(--bg-elev);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:12px">
+      <button class="btn btn-outline" style="padding:4px 10px;font-size:12px" onclick="TimeRange.applyCustom()">Apply</button>
+    </span>
+    <span id="timeRangeLabel" style="color:var(--text-muted);font-size:12px;margin-left:auto"></span>
+  </div>
+
   <!-- Campaign Stats (top of page) -->
   <div class="metrics">
     <div class="metric-card accent">
@@ -1039,12 +1056,88 @@ const Workflows = {
 // SHEET VIEW (Tabbed data browser)
 // ============================================================
 // ============================================================
+// TIME RANGE — global picker controlling top tiles + revenue breakdown
+// ============================================================
+const TimeRange = {
+  current: '30',          // '7' | '14' | '30' | 'all' | 'custom'
+  customStart: null,      // 'YYYY-MM-DD'
+  customEnd: null,
+
+  set(range) {
+    this.current = range;
+    document.querySelectorAll('#timeRangeBar .sheet-tab').forEach(t => t.classList.remove('active'));
+    const btn = document.querySelector(`#timeRangeBar .sheet-tab[onclick*="'${range}'"]`);
+    if (btn) btn.classList.add('active');
+    const customBox = document.getElementById('timeRangeCustomInputs');
+    if (customBox) customBox.style.display = range === 'custom' ? 'inline-flex' : 'none';
+    if (range !== 'custom' && App.lastData) {
+      Performance.render(App.lastData);
+    }
+  },
+
+  applyCustom() {
+    this.customStart = document.getElementById('timeRangeStart').value || null;
+    this.customEnd = document.getElementById('timeRangeEnd').value || null;
+    if (App.lastData) Performance.render(App.lastData);
+  },
+
+  // Returns [startMs, endMs] inclusive, or null for all-time
+  getBounds() {
+    if (this.current === 'all') return null;
+    if (this.current === 'custom') {
+      if (!this.customStart || !this.customEnd) return null;
+      return [
+        new Date(this.customStart + 'T00:00:00Z').getTime(),
+        new Date(this.customEnd + 'T23:59:59Z').getTime()
+      ];
+    }
+    const days = parseInt(this.current);
+    const end = Date.now();
+    const start = end - days * 86400000;
+    return [start, end];
+  },
+
+  filterRows(rows, dateField) {
+    const bounds = this.getBounds();
+    if (!bounds) return rows;
+    return rows.filter(r => {
+      const v = r[dateField];
+      if (!v) return false;
+      const t = new Date(v).getTime();
+      return !isNaN(t) && t >= bounds[0] && t <= bounds[1];
+    });
+  },
+
+  rangeLabel() {
+    if (this.current === 'all') return 'all-time';
+    if (this.current === 'custom') {
+      if (!this.customStart || !this.customEnd) return 'pick a custom range';
+      return `${this.customStart} → ${this.customEnd}`;
+    }
+    return `last ${this.current}d`;
+  },
+
+  // Build "Mar 30 → Apr 27" from a list of YYYY-MM-DD day strings
+  dataRangeLabel(days) {
+    if (!days || days.length === 0) return null;
+    const sorted = days.filter(Boolean).sort();
+    if (sorted.length === 0) return null;
+    return `${sorted[0]} → ${sorted[sorted.length - 1]}`;
+  }
+};
+
+// ============================================================
 // PERFORMANCE — Billable Calls + Top Ads with Iterate actions
 // ============================================================
 const Performance = {
   render(data) {
-    const calls = data.calls || [];
+    const allCalls = data.calls || [];
     const generated = data.generated || [];
+
+    // Apply global time range filter
+    const calls = TimeRange.filterRows(allCalls, 'timestamp');
+    const spendRows = TimeRange.filterRows(data.metaSpend || [], 'day');
+    const nbSpendRows = TimeRange.filterRows(data.nbSpend || [], 'day');
 
     // Aggregate calls
     const billable = calls.filter(c => (c.status || '').toLowerCase() === 'billable' || parseFloat(c.payout) > 0);
@@ -1061,22 +1154,34 @@ const Performance = {
       if (c.timestamp > byAd[adId].last_call) byAd[adId].last_call = c.timestamp;
     }
 
-    // Attach matching generated creatives (by ad_id stored in based_on_ad_id, or by heuristic)
-    // Total spend across all Meta Spend rows (lifetime)
-    const spendRows = data.metaSpend || [];
-    const totalSpend = spendRows.reduce((s, r) => s + (parseFloat(r.spend) || 0), 0);
+    // Total spend = Meta + NewsBreak across the selected time range
+    const spendMeta = spendRows.reduce((s, r) => s + (parseFloat(r.spend) || 0), 0);
+    const spendNB = nbSpendRows.reduce((s, r) => s + (parseFloat(r.spend) || 0), 0);
+    const totalSpend = spendMeta + spendNB;
     const roas = totalSpend > 0 ? totalRevenue / totalSpend : 0;
 
+    // Date range actually present in the filtered spend data
+    const allDays = [...spendRows.map(r => r.day), ...nbSpendRows.map(r => r.day)];
+    const dataRange = TimeRange.dataRangeLabel(allDays);
+    const rangeLbl = TimeRange.rangeLabel();
+
     document.getElementById('perf-billable').textContent = billable.length;
-    document.getElementById('perf-billable-sub').textContent = `of ${calls.length} total calls`;
+    document.getElementById('perf-billable-sub').textContent = `of ${calls.length} calls · ${rangeLbl}`;
     document.getElementById('perf-revenue').textContent = '$' + totalRevenue.toFixed(2);
-    document.getElementById('perf-revenue-sub').textContent = billable.length > 0 ? 'lifetime' : 'no billable calls yet';
+    document.getElementById('perf-revenue-sub').textContent = billable.length > 0 ? rangeLbl : 'no billable calls in range';
     document.getElementById('perf-spend').textContent = '$' + totalSpend.toFixed(2);
-    document.getElementById('perf-spend-sub').textContent = spendRows.length > 0 ? `${spendRows.length} ad×day rows` : 'no Meta data';
+    const totalSpendRows = spendRows.length + nbSpendRows.length;
+    document.getElementById('perf-spend-sub').textContent = totalSpendRows > 0
+      ? `${dataRange || rangeLbl} · Meta $${spendMeta.toFixed(0)} + NB $${spendNB.toFixed(0)}`
+      : `no spend data in range`;
     const roasEl = document.getElementById('perf-roas');
     roasEl.textContent = totalSpend > 0 ? roas.toFixed(2) + 'x' : '--';
     roasEl.style.color = roas >= 1 ? 'var(--success)' : (roas > 0 ? 'var(--warning)' : '');
-    document.getElementById('perf-roas-sub').textContent = totalSpend > 0 ? 'revenue / spend' : 'awaiting spend data';
+    document.getElementById('perf-roas-sub').textContent = totalSpend > 0 ? `${rangeLbl} · revenue / spend` : 'awaiting spend data';
+
+    // Header label
+    const tlbl = document.getElementById('timeRangeLabel');
+    if (tlbl) tlbl.textContent = dataRange ? `Showing ${rangeLbl} · data ${dataRange}` : `Showing ${rangeLbl}`;
 
     document.getElementById('perf-note').innerHTML =
       (totalSpend > 0 && totalRevenue > 0)
@@ -2549,6 +2654,7 @@ const App = {
     document.getElementById('lastUpdated').textContent = 'Refreshing...';
     try {
       const data = await DataService.fetchAll();
+      App.lastData = data;
       const m = Metrics.compute(data);
       renderMetrics(m);
       TopAds.render(data);
