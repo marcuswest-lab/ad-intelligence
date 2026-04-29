@@ -307,7 +307,7 @@ tbody tr.selected { background: rgba(99,102,241,0.08); }
   <!-- Page tabs -->
   <div class="sheet-tabs" id="pageTabs" style="margin-bottom:16px">
     <button class="sheet-tab active" onclick="PageNav.switchTab('dashboard')" data-page="dashboard">Dashboard</button>
-    <button class="sheet-tab" onclick="PageNav.switchTab('strategist')" data-page="strategist">Strategist Report</button>
+    <button class="sheet-tab" onclick="PageNav.switchTab('strategist')" data-page="strategist">Strategist</button>
     <button class="sheet-tab" onclick="PageNav.switchTab('creatives')" data-page="creatives">Creatives</button>
     <button class="sheet-tab" onclick="PageNav.switchTab('settings')" data-page="settings">Settings</button>
   </div>
@@ -638,6 +638,29 @@ tbody tr.selected { background: rgba(99,102,241,0.08); }
       <div id="strategistMeta" style="font-size:12px;color:var(--text-muted);margin-bottom:12px"></div>
       <div id="strategistBody" style="font-size:14px;line-height:1.7;padding:20px;background:var(--bg);border-radius:6px;border:1px solid var(--border)">
         Loading…
+      </div>
+    </div>
+
+    <!-- Chat with strategist -->
+    <div class="card" id="strategistChatCard">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:8px">
+        <h2 style="margin:0"><span class="dot" style="background:#a855f7"></span> Chat with Strategist</h2>
+        <div style="display:flex;gap:8px;align-items:center">
+          <span style="font-size:11px;color:var(--text-muted)">claude-opus-4-6 · context: latest daily report</span>
+          <button onclick="StrategistChat.reset()" style="background:transparent;border:1px solid var(--border);color:var(--text-muted);padding:4px 10px;border-radius:6px;font-size:11px;cursor:pointer">Clear</button>
+        </div>
+      </div>
+      <div id="strategistChatLog" style="display:flex;flex-direction:column;gap:10px;padding:14px;background:var(--bg);border:1px solid var(--border);border-radius:6px;min-height:200px;max-height:520px;overflow-y:auto;margin-bottom:10px;font-size:14px;line-height:1.55">
+        <div style="color:var(--text-muted);font-size:13px;text-align:center;padding:24px">
+          Ask anything about today's performance. Try: "What should I cut?" · "Which ads are scaling?" · "Where's the lowest-hanging optimization?"
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:flex-end">
+        <textarea id="strategistChatInput" rows="2" placeholder="Message the strategist…"
+          onkeydown="if(event.key==='Enter' && !event.shiftKey){event.preventDefault(); StrategistChat.send();}"
+          style="flex:1;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:10px 12px;font-size:14px;font-family:inherit;resize:vertical;min-height:44px;max-height:200px"></textarea>
+        <button id="strategistChatSend" onclick="StrategistChat.send()"
+          style="background:#a855f7;border:none;color:white;padding:10px 18px;border-radius:6px;font-size:14px;cursor:pointer;font-weight:600;height:44px">Send</button>
       </div>
     </div>
   </div>
@@ -3505,6 +3528,99 @@ const MetaLauncher = {
       statusEl.textContent = '✗ ' + (e.message || 'Launch failed');
       Toast.show('Launch failed: ' + e.message, 'error');
       btn.disabled = false; btn.textContent = 'Launch as PAUSED';
+    }
+  }
+};
+
+// ============================================================
+// STRATEGIST CHAT — back-and-forth with Claude opus-4-6 grounded in the daily report
+// ============================================================
+const StrategistChat = {
+  messages: [],   // [{role:'user'|'assistant', content:string}]
+  busy: false,
+
+  esc(s) { return (s || '').toString().replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); },
+
+  // Minimal markdown → HTML (bold, italic, code, line breaks)
+  fmt(s) {
+    let h = this.esc(s);
+    h = h.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    h = h.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+    h = h.replace(/`([^`]+)`/g, '<code style="background:rgba(168,85,247,0.12);padding:1px 5px;border-radius:3px;font-size:12px">$1</code>');
+    h = h.replace(/\n/g, '<br>');
+    return h;
+  },
+
+  reset() {
+    this.messages = [];
+    const log = document.getElementById('strategistChatLog');
+    if (log) log.innerHTML = `<div style="color:var(--text-muted);font-size:13px;text-align:center;padding:24px">Conversation cleared. Ask anything about performance.</div>`;
+  },
+
+  renderLog() {
+    const log = document.getElementById('strategistChatLog');
+    if (!log) return;
+    if (this.messages.length === 0) {
+      log.innerHTML = `<div style="color:var(--text-muted);font-size:13px;text-align:center;padding:24px">Ask anything about today's performance.</div>`;
+      return;
+    }
+    log.innerHTML = this.messages.map(m => {
+      const isUser = m.role === 'user';
+      const bg = isUser ? 'rgba(168,85,247,0.10)' : 'var(--bg-elev)';
+      const border = isUser ? 'rgba(168,85,247,0.30)' : 'var(--border)';
+      const label = isUser ? 'You' : 'Strategist';
+      const labelColor = isUser ? '#c084fc' : 'var(--text-muted)';
+      return `
+        <div style="display:flex;flex-direction:column;align-self:${isUser ? 'flex-end' : 'flex-start'};max-width:85%">
+          <div style="font-size:10px;color:${labelColor};margin-bottom:3px;text-transform:uppercase;letter-spacing:0.4px;font-weight:600">${label}</div>
+          <div style="background:${bg};border:1px solid ${border};padding:10px 14px;border-radius:10px;color:var(--text)">${this.fmt(m.content)}</div>
+        </div>
+      `;
+    }).join('');
+    log.scrollTop = log.scrollHeight;
+  },
+
+  async send() {
+    if (this.busy) return;
+    const input = document.getElementById('strategistChatInput');
+    const sendBtn = document.getElementById('strategistChatSend');
+    const text = (input.value || '').trim();
+    if (!text) return;
+
+    this.messages.push({ role: 'user', content: text });
+    input.value = '';
+    this.renderLog();
+
+    // Pending bubble
+    this.busy = true;
+    sendBtn.disabled = true;
+    sendBtn.textContent = '…';
+    const log = document.getElementById('strategistChatLog');
+    const pending = document.createElement('div');
+    pending.style.cssText = 'display:flex;flex-direction:column;align-self:flex-start;max-width:85%';
+    pending.innerHTML = `
+      <div style="font-size:10px;color:var(--text-muted);margin-bottom:3px;text-transform:uppercase;letter-spacing:0.4px;font-weight:600">Strategist</div>
+      <div style="background:var(--bg-elev);border:1px solid var(--border);padding:10px 14px;border-radius:10px;color:var(--text-muted);font-style:italic">Thinking…</div>`;
+    log.appendChild(pending);
+    log.scrollTop = log.scrollHeight;
+
+    try {
+      const r = await fetch(`${CONFIG.n8nUrl}/webhook/strategist-chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: this.messages })
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      const reply = data.response || '(no response)';
+      this.messages.push({ role: 'assistant', content: reply });
+    } catch (e) {
+      this.messages.push({ role: 'assistant', content: `_Error: ${e.message}_` });
+    } finally {
+      this.busy = false;
+      sendBtn.disabled = false;
+      sendBtn.textContent = 'Send';
+      this.renderLog();
     }
   }
 };
