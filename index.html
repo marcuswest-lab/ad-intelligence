@@ -3664,6 +3664,93 @@ const StrategistChat = {
     log.scrollTop = log.scrollHeight;
   },
 
+  // Build a compact snapshot of what's currently on the dashboard, with the user's
+  // active TimeRange + PlatformFilter applied. Sent with every chat turn so the
+  // strategist sees the same numbers the user is looking at.
+  buildDashboardSnapshot() {
+    if (!App.lastData) return null;
+    const ld = App.lastData;
+    const showMeta = typeof PlatformFilter !== 'undefined' ? PlatformFilter.showMeta() : true;
+    const showNB = typeof PlatformFilter !== 'undefined' ? PlatformFilter.showNB() : true;
+    const calls = TimeRange.filterRows(ld.calls || [], 'timestamp');
+    const metaSpend = showMeta ? TimeRange.filterRows(ld.metaSpend || [], 'day') : [];
+    const nbSpend = showNB ? TimeRange.filterRows(ld.nbSpend || [], 'day') : [];
+
+    // Aggregate
+    const billable = calls.filter(c => (c.status||'').toLowerCase()==='billable' || parseFloat(c.payout)>0);
+    const revenue = billable.reduce((s,c)=>s+(parseFloat(c.payout)||0),0);
+    const spendMeta = metaSpend.reduce((s,r)=>s+(parseFloat(r.spend)||0),0);
+    const spendNB = nbSpend.reduce((s,r)=>s+(parseFloat(r.spend)||0),0);
+    const totalSpend = spendMeta + spendNB;
+    const roas = totalSpend > 0 ? revenue/totalSpend : 0;
+
+    // Per-ad performance (top 12 by spend)
+    const perAd = {};
+    for (const r of metaSpend) {
+      const k = r.ad_name || r.ad_id || 'unknown';
+      if (!perAd[k]) perAd[k] = { name:k, platform:'Meta', spend:0, impressions:0, clicks:0, calls:0, revenue:0 };
+      perAd[k].spend += parseFloat(r.spend)||0;
+      perAd[k].impressions += parseFloat(r.impressions)||0;
+      perAd[k].clicks += parseFloat(r.link_clicks)||0;
+    }
+    for (const r of nbSpend) {
+      const k = r.ad_name || r.ad_id || 'unknown';
+      if (!perAd[k]) perAd[k] = { name:k, platform:'NewsBreak', spend:0, impressions:0, clicks:0, calls:0, revenue:0 };
+      perAd[k].spend += parseFloat(r.spend)||0;
+      perAd[k].impressions += parseFloat(r.impressions)||0;
+      perAd[k].clicks += parseFloat(r.clicks)||0;
+    }
+    // Attach calls by name hint (sub5/sub4)
+    for (const c of calls) {
+      const hint = ((c.sub5_utm_content||'')+' '+(c.sub4_utm_campaign||'')).toLowerCase().trim();
+      if (!hint) continue;
+      for (const k of Object.keys(perAd)) {
+        if (k.toLowerCase().includes(hint) || hint.includes(k.toLowerCase().split(' | ')[0] || '')) {
+          perAd[k].calls += 1;
+          if ((c.status||'').toLowerCase()==='billable' || parseFloat(c.payout)>0) {
+            perAd[k].revenue += parseFloat(c.payout)||0;
+          }
+          break;
+        }
+      }
+    }
+    const topAds = Object.values(perAd)
+      .filter(a => a.spend > 0)
+      .sort((a,b)=>b.spend-a.spend)
+      .slice(0,12)
+      .map(a => ({
+        name: a.name, platform: a.platform,
+        spend: +a.spend.toFixed(2),
+        ctr: a.impressions>0 ? +(a.clicks/a.impressions*100).toFixed(2) : 0,
+        calls: a.calls, revenue: +a.revenue.toFixed(2),
+        roas: a.spend>0 ? +(a.revenue/a.spend).toFixed(2) : 0
+      }));
+
+    // Recent generated creatives (last 10)
+    const generated = (ld.generated || []).slice(-10).map(g => ({
+      name: g.display_name || g.headline || g.creative_id,
+      type: g.type, hook: g.hook_type, created: g.created_at
+    }));
+
+    return {
+      filters: {
+        time_range: TimeRange.rangeLabel(),
+        platform: typeof PlatformFilter !== 'undefined' ? PlatformFilter.label() : 'all'
+      },
+      totals: {
+        calls: calls.length,
+        billable: billable.length,
+        revenue: +revenue.toFixed(2),
+        spend_meta: +spendMeta.toFixed(2),
+        spend_nb: +spendNB.toFixed(2),
+        spend_total: +totalSpend.toFixed(2),
+        roas: +roas.toFixed(2)
+      },
+      top_ads: topAds,
+      recent_generated: generated
+    };
+  },
+
   async send() {
     if (this.busy) return;
     const input = document.getElementById('strategistChatInput');
@@ -3689,10 +3776,11 @@ const StrategistChat = {
     log.scrollTop = log.scrollHeight;
 
     try {
+      const snapshot = this.buildDashboardSnapshot();
       const r = await fetch(`${CONFIG.n8nUrl}/webhook/strategist-chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: this.messages })
+        body: JSON.stringify({ messages: this.messages, dashboard: snapshot })
       });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const data = await r.json();
