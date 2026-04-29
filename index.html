@@ -667,6 +667,30 @@ tbody tr.selected { background: rgba(99,102,241,0.08); }
 
 </div>
 
+<!-- Iterate-with-feedback modal -->
+<div class="modal-overlay hidden" id="feedbackModal" onclick="if(event.target===this)IterateFeedback.close()">
+  <div class="launch-modal" style="max-width:600px">
+    <h3>Iterate with feedback</h3>
+    <div style="font-size:12px;color:var(--text-muted);margin:-6px 0 14px" id="feedbackModalSubtitle"></div>
+
+    <label>Your direction (be specific — angles, hooks, copy tone, visual changes…)</label>
+    <textarea id="feedbackText" rows="6" placeholder="e.g. 'Lean harder into wage-garnishment urgency. Try a question hook. Keep the same green color but swap the woman for a worried man. Make the headline shorter.'"
+      style="width:100%;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:10px 12px;font-size:14px;font-family:inherit;resize:vertical;min-height:120px;box-sizing:border-box"></textarea>
+
+    <label style="margin-top:14px">How many variations?</label>
+    <select id="feedbackIterations" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-size:14px">
+      <option value="1">1 (quick test)</option>
+      <option value="3" selected>3</option>
+      <option value="5">5</option>
+    </select>
+
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:18px">
+      <button onclick="IterateFeedback.close()" style="background:transparent;border:1px solid var(--border);color:var(--text);padding:8px 16px;border-radius:6px;cursor:pointer">Cancel</button>
+      <button onclick="IterateFeedback.submit()" id="feedbackSubmitBtn" style="background:var(--accent);border:none;color:white;padding:8px 18px;border-radius:6px;cursor:pointer;font-weight:600">Generate</button>
+    </div>
+  </div>
+</div>
+
 <!-- Toast Container -->
 <div class="toast-container" id="toasts"></div>
 
@@ -1977,12 +2001,14 @@ const SheetView = {
       const downloadBtn = (this.currentTab === 'generated' && srcId && (r.generated_image_url || r.video_url))
         ? `<button class="iter-btn download" onclick="SheetView.downloadCreative('${esc(srcId)}')">↓ Download</button>`
         : '';
+      const labelForFb = (name || srcId).toString().slice(0, 60).replace(/'/g, "\\'");
       const actionsHtml = iterateAction
         ? `<div class="actions">
              ${launchBtn}
              ${downloadBtn}
              <button class="iter-btn primary" onclick="SheetView.iterateFrom('${iterateAction.kind}','${esc(iterateAction.id)}', 3)">Iterate (3 variations)</button>
              <button class="iter-btn secondary" onclick="SheetView.iterateFrom('${iterateAction.kind}','${esc(iterateAction.id)}', 1)">Quick test (1)</button>
+             <button class="iter-btn secondary" onclick="IterateFeedback.open('${iterateAction.kind}','${esc(iterateAction.id)}','${esc(labelForFb)}')">Iterate with feedback</button>
              ${deleteBtn}
            </div>`
         : (deleteBtn ? `<div class="actions">${deleteBtn}</div>` : '');
@@ -3528,6 +3554,63 @@ const MetaLauncher = {
       statusEl.textContent = '✗ ' + (e.message || 'Launch failed');
       Toast.show('Launch failed: ' + e.message, 'error');
       btn.disabled = false; btn.textContent = 'Launch as PAUSED';
+    }
+  }
+};
+
+// ============================================================
+// ITERATE WITH FEEDBACK — modal that adds free-text direction to the iterate webhooks
+// ============================================================
+const IterateFeedback = {
+  current: null,  // { kind, id, label }
+
+  open(kind, id, label) {
+    this.current = { kind, id, label: label || id };
+    document.getElementById('feedbackModalSubtitle').textContent =
+      `${kind === 'creative' ? 'Generated creative' : 'Scraped ad'}: ${this.current.label}`;
+    document.getElementById('feedbackText').value = '';
+    document.getElementById('feedbackIterations').value = '3';
+    document.getElementById('feedbackModal').classList.remove('hidden');
+    setTimeout(() => document.getElementById('feedbackText').focus(), 50);
+  },
+
+  close() {
+    document.getElementById('feedbackModal').classList.add('hidden');
+    this.current = null;
+  },
+
+  async submit() {
+    if (!this.current) return;
+    const fb = (document.getElementById('feedbackText').value || '').trim();
+    if (!fb) { Toast.show('Add some feedback first', 'error'); return; }
+    const iterations = parseInt(document.getElementById('feedbackIterations').value) || 3;
+    const btn = document.getElementById('feedbackSubmitBtn');
+    btn.disabled = true; btn.textContent = 'Sending…';
+
+    const { kind, id, label } = this.current;
+    const idParam = kind === 'creative' ? 'creative_id' : 'ad_id';
+    const endpoint = kind === 'creative' ? 'ad-iterate-creative' : 'ad-iterate-from-scraped';
+    const url = `${CONFIG.n8nUrl}/webhook/${endpoint}?${idParam}=${encodeURIComponent(id)}&iterations=${iterations}&feedback=${encodeURIComponent(fb)}`;
+
+    // Mirror the progress tracking the regular iterate buttons use
+    ProgressTracker.start({
+      id: `${kind}_${id}_${Date.now()}`,
+      type: 'creative',
+      creativeId: id,
+      label: `Variations from ${label} (with feedback)`,
+      expectedSec: ProgressTracker.expectedFor('creative') || 240
+    });
+
+    try {
+      const r = await fetch(url, { method: 'GET' });
+      if (!r.ok) Toast.show(`Iterate returned HTTP ${r.status}`, 'error');
+      else Toast.show('Iteration kicked off with your feedback', 'success');
+      setTimeout(() => App.refresh(), 2000);
+      this.close();
+    } catch (e) {
+      Toast.show(`Iterate error: ${e.message}`, 'error');
+    } finally {
+      btn.disabled = false; btn.textContent = 'Generate';
     }
   }
 };
