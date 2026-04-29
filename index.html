@@ -308,6 +308,8 @@ tbody tr.selected { background: rgba(99,102,241,0.08); }
   <div class="sheet-tabs" id="pageTabs" style="margin-bottom:16px">
     <button class="sheet-tab active" onclick="PageNav.switchTab('dashboard')" data-page="dashboard">Dashboard</button>
     <button class="sheet-tab" onclick="PageNav.switchTab('strategist')" data-page="strategist">Strategist Report</button>
+    <button class="sheet-tab" onclick="PageNav.switchTab('creatives')" data-page="creatives">Creatives</button>
+    <button class="sheet-tab" onclick="PageNav.switchTab('settings')" data-page="settings">Settings</button>
   </div>
 
   <!-- ============ DASHBOARD PAGE ============ -->
@@ -389,6 +391,11 @@ tbody tr.selected { background: rgba(99,102,241,0.08); }
 
   </div>
 
+  </div><!-- /page-dashboard EARLY CLOSE - Creatives + Settings moved out -->
+
+  <!-- ============ CREATIVES PAGE ============ -->
+  <div id="page-creatives" style="display:none">
+
   <!-- Tabbed Data View -->
   <div class="card">
     <div class="sheet-tabs" id="sheetTabs">
@@ -396,7 +403,6 @@ tbody tr.selected { background: rgba(99,102,241,0.08); }
       <button class="sheet-tab" onclick="SheetView.switchTab('scraped')">Scraped Ads</button>
       <button class="sheet-tab" onclick="SheetView.switchTab('analysis')">Analysis</button>
       <button class="sheet-tab" onclick="SheetView.switchTab('generated')">Generated Creatives</button>
-      <button class="sheet-tab" onclick="SheetView.switchTab('settings')">Settings</button>
     </div>
     <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
       <div class="table-controls" id="tableFilters" style="flex:1"></div>
@@ -418,6 +424,11 @@ tbody tr.selected { background: rgba(99,102,241,0.08); }
     </div>
     <div class="sheet-footer" id="sheetFooter"></div>
   </div>
+
+  </div><!-- /page-creatives -->
+
+  <!-- ============ SETTINGS PAGE ============ -->
+  <div id="page-settings" style="display:none">
 
   <!-- Settings & Configuration -->
   <div class="card" id="settingsPanel">
@@ -608,7 +619,7 @@ tbody tr.selected { background: rgba(99,102,241,0.08); }
     </div><!-- /settingsBody -->
   </div>
 
-  </div><!-- /page-dashboard -->
+  </div><!-- /page-settings -->
 
   <!-- ============ STRATEGIST PAGE ============ -->
   <div id="page-strategist" style="display:none">
@@ -1838,6 +1849,45 @@ const SheetView = {
       return m ? m[1] : null;
     };
 
+    // For "mine" tab: pre-build a name → {spend, calls, revenue} index by matching
+    // each Meta Spend ad_name against headlines, and each call's sub fields against headlines.
+    // Honors the global TimeRange + PlatformFilter.
+    let myadsPerf = null;
+    if (this.currentTab === 'myads' && App.lastData) {
+      const ld = App.lastData;
+      const showMeta = typeof PlatformFilter !== 'undefined' ? PlatformFilter.showMeta() : true;
+      const spendRows = showMeta ? TimeRange.filterRows(ld.metaSpend || [], 'day') : [];
+      const callRows = TimeRange.filterRows(ld.calls || [], 'timestamp');
+      myadsPerf = (headline) => {
+        if (!headline) return null;
+        const h = headline.toString().toLowerCase().trim();
+        if (!h) return null;
+        let spend = 0, impressions = 0, clicks = 0, days = 0;
+        for (const sr of spendRows) {
+          const an = (sr.ad_name || '').toLowerCase();
+          if (an && an.includes(h)) {
+            spend += parseFloat(sr.spend) || 0;
+            impressions += parseFloat(sr.impressions) || 0;
+            clicks += parseFloat(sr.link_clicks) || 0;
+            days += 1;
+          }
+        }
+        let calls = 0, billable = 0, revenue = 0;
+        for (const c of callRows) {
+          const hint = ((c.sub5_utm_content || '') + ' ' + (c.sub4_utm_campaign || '')).toLowerCase();
+          if (hint && hint.includes(h)) {
+            calls += 1;
+            const pay = parseFloat(c.payout) || 0;
+            if ((c.status || '').toLowerCase() === 'billable' || pay > 0) { billable += 1; revenue += pay; }
+          }
+        }
+        if (spend === 0 && calls === 0) return null;
+        const roas = spend > 0 ? revenue / spend : 0;
+        const ctr = impressions > 0 ? (clicks / impressions * 100) : 0;
+        return { spend, impressions, clicks, ctr, days, calls, billable, revenue, roas };
+      };
+    }
+
     const cards = data.map(r => {
       // Source-aware field mapping
       let imgUrl = '';
@@ -1924,6 +1974,26 @@ const SheetView = {
                `<option value="${f}"${(r.creative_format||'photo')===f?' selected':''}>${f}</option>`).join('')}
            </select>`
         : '';
+      // Performance stats overlay (mine tab only)
+      let statsHtml = '';
+      if (myadsPerf) {
+        const p = myadsPerf(r.headline || r.ad_text);
+        if (p) {
+          const roasColor = p.roas >= 1 ? 'var(--success)' : (p.roas > 0 ? 'var(--warning)' : 'var(--text-muted)');
+          statsHtml = `
+            <div class="myads-stats" style="display:grid;grid-template-columns:1fr 1fr;gap:4px 10px;font-size:11px;padding:6px 8px;background:var(--bg);border-top:1px solid var(--border);border-bottom:1px solid var(--border)">
+              <span style="color:var(--text-muted)">Spend</span><span style="text-align:right">$${p.spend.toFixed(2)}</span>
+              <span style="color:var(--text-muted)">Calls</span><span style="text-align:right">${p.billable}/${p.calls}</span>
+              <span style="color:var(--text-muted)">Revenue</span><span style="text-align:right;color:${p.revenue > 0 ? 'var(--success)' : 'var(--text-muted)'}">$${p.revenue.toFixed(2)}</span>
+              <span style="color:var(--text-muted)">ROAS</span><span style="text-align:right;color:${roasColor};font-weight:600">${p.spend > 0 ? p.roas.toFixed(2) + 'x' : '—'}</span>
+              <span style="color:var(--text-muted)">CTR</span><span style="text-align:right">${p.ctr.toFixed(2)}%</span>
+              <span style="color:var(--text-muted)">Days</span><span style="text-align:right">${p.days}</span>
+            </div>`;
+        } else {
+          statsHtml = `<div class="myads-stats" style="font-size:11px;padding:6px 8px;color:var(--text-muted);background:var(--bg);border-top:1px solid var(--border);border-bottom:1px solid var(--border);text-align:center">No performance data in current range</div>`;
+        }
+      }
+
       return `
         <div class="myads-card${isSelected ? ' selected' : ''}">
           ${cbHtml}
@@ -1935,6 +2005,7 @@ const SheetView = {
             <div class="name">${esc(name.slice(0, 80))}</div>
             <div class="tag">${esc(tag || 'ad')}</div>
           </div>
+          ${statsHtml}
           ${actionsHtml}
         </div>
       `;
@@ -3443,13 +3514,28 @@ const MetaLauncher = {
 // ============================================================
 const PageNav = {
   current: 'dashboard',
+  pages: ['dashboard', 'strategist', 'creatives', 'settings'],
   switchTab(page) {
+    if (!this.pages.includes(page)) page = 'dashboard';
     this.current = page;
     document.querySelectorAll('#pageTabs .sheet-tab').forEach(t => {
       t.classList.toggle('active', t.dataset.page === page);
     });
-    document.getElementById('page-dashboard').style.display = page === 'dashboard' ? '' : 'none';
-    document.getElementById('page-strategist').style.display = page === 'strategist' ? '' : 'none';
+    for (const p of this.pages) {
+      const el = document.getElementById('page-' + p);
+      if (el) el.style.display = p === page ? '' : 'none';
+    }
+    // Settings panel auto-expands when its page is shown
+    if (page === 'settings') {
+      const body = document.getElementById('settingsBody');
+      if (body) body.style.display = '';
+      const icon = document.getElementById('settingsToggleIcon');
+      if (icon) icon.textContent = '';
+    }
+    // Re-render Creatives page when switching to it (in case data loaded while hidden)
+    if (page === 'creatives' && typeof SheetView !== 'undefined' && App.lastData) {
+      SheetView.render();
+    }
     try { localStorage.setItem('adIntel.activePage', page); } catch(e) {}
   },
   init() {
