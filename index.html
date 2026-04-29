@@ -313,8 +313,8 @@ tbody tr.selected { background: rgba(99,102,241,0.08); }
   <!-- ============ DASHBOARD PAGE ============ -->
   <div id="page-dashboard">
 
-  <!-- Global time range selector -->
-  <div class="sheet-tabs" id="timeRangeBar" style="margin-bottom:12px;align-items:center;flex-wrap:wrap;gap:6px">
+  <!-- Global time range + platform selectors -->
+  <div class="sheet-tabs" id="timeRangeBar" style="margin-bottom:8px;align-items:center;flex-wrap:wrap;gap:6px">
     <span style="color:var(--text-muted);font-size:12px;margin-right:4px">Time range:</span>
     <button class="sheet-tab" onclick="TimeRange.set('7')">7d</button>
     <button class="sheet-tab" onclick="TimeRange.set('14')">14d</button>
@@ -328,6 +328,12 @@ tbody tr.selected { background: rgba(99,102,241,0.08); }
       <button class="btn btn-outline" style="padding:4px 10px;font-size:12px" onclick="TimeRange.applyCustom()">Apply</button>
     </span>
     <span id="timeRangeLabel" style="color:var(--text-muted);font-size:12px;margin-left:auto"></span>
+  </div>
+  <div class="sheet-tabs" id="platformBar" style="margin-bottom:12px;align-items:center;flex-wrap:wrap;gap:6px">
+    <span style="color:var(--text-muted);font-size:12px;margin-right:4px">Platform:</span>
+    <button class="sheet-tab active" onclick="PlatformFilter.set('all')">All</button>
+    <button class="sheet-tab" onclick="PlatformFilter.set('meta')">Meta</button>
+    <button class="sheet-tab" onclick="PlatformFilter.set('nb')">NewsBreak</button>
   </div>
 
   <!-- Campaign Stats (top of page) -->
@@ -360,12 +366,7 @@ tbody tr.selected { background: rgba(99,102,241,0.08); }
   <!-- Ads Performance (Meta + NewsBreak) -->
   <div class="card" id="topAdsCard">
     <h2><span class="dot" style="background:var(--warning)"></span> Ads Performance</h2>
-    <div class="sheet-tabs" id="metaAdsTabs" style="margin-top:4px;margin-bottom:12px">
-      <button class="sheet-tab active" onclick="TopAds.switchTab('meta_live')">Meta — Live (14d)</button>
-      <button class="sheet-tab" onclick="TopAds.switchTab('meta_alltime')">Meta — All-Time</button>
-      <button class="sheet-tab" onclick="TopAds.switchTab('nb')">NewsBreak (30d)</button>
-      <button class="sheet-tab" onclick="TopAds.switchTab('all')">All Channels</button>
-    </div>
+    <div style="font-size:12px;color:var(--text-muted);margin-top:4px;margin-bottom:8px">Honors the time range + platform filters at the top of the page.</div>
     <div id="top-ads-meta" style="font-size:12px;color:var(--text-muted);margin-bottom:12px"></div>
     <div class="table-wrap">
       <table>
@@ -1127,6 +1128,31 @@ const TimeRange = {
 };
 
 // ============================================================
+// PLATFORM FILTER — global picker for Meta / NewsBreak / All
+// ============================================================
+const PlatformFilter = {
+  current: 'all',  // 'all' | 'meta' | 'nb'
+
+  set(platform) {
+    this.current = platform;
+    document.querySelectorAll('#platformBar .sheet-tab').forEach(t => t.classList.remove('active'));
+    const btn = document.querySelector(`#platformBar .sheet-tab[onclick*="'${platform}'"]`);
+    if (btn) btn.classList.add('active');
+    if (App.lastData) {
+      Performance.render(App.lastData);
+      TopAds.render(App.lastData);
+    }
+  },
+
+  showMeta() { return this.current === 'all' || this.current === 'meta'; },
+  showNB()   { return this.current === 'all' || this.current === 'nb'; },
+
+  label() {
+    return { all: 'Meta + NewsBreak', meta: 'Meta only', nb: 'NewsBreak only' }[this.current] || 'all';
+  }
+};
+
+// ============================================================
 // PERFORMANCE — Billable Calls + Top Ads with Iterate actions
 // ============================================================
 const Performance = {
@@ -1134,10 +1160,20 @@ const Performance = {
     const allCalls = data.calls || [];
     const generated = data.generated || [];
 
-    // Apply global time range filter
-    const calls = TimeRange.filterRows(allCalls, 'timestamp');
-    const spendRows = TimeRange.filterRows(data.metaSpend || [], 'day');
-    const nbSpendRows = TimeRange.filterRows(data.nbSpend || [], 'day');
+    // Apply global time range + platform filters
+    const showMeta = PlatformFilter.showMeta();
+    const showNB = PlatformFilter.showNB();
+    const calls = TimeRange.filterRows(allCalls, 'timestamp').filter(c => {
+      const src = (c.source || '').toLowerCase();
+      // Calls: Meta = anything that looks like FB; NewsBreak = explicit nb; otherwise count under both
+      const isNB = src.includes('newsbreak') || src.includes('nb') || (c.sub2_nb_click_id || '').length > 0;
+      const isMeta = !isNB && ((c.sub1_fbclid || '').length > 0 || src.includes('facebook') || src.includes('meta') || src.includes('fb'));
+      if (PlatformFilter.current === 'meta') return isMeta || (!isNB && !isMeta); // include unattributed under Meta when Meta-only since campaign is Meta-heavy
+      if (PlatformFilter.current === 'nb') return isNB;
+      return true;
+    });
+    const spendRows = showMeta ? TimeRange.filterRows(data.metaSpend || [], 'day') : [];
+    const nbSpendRows = showNB ? TimeRange.filterRows(data.nbSpend || [], 'day') : [];
 
     // Aggregate calls
     const billable = calls.filter(c => (c.status || '').toLowerCase() === 'billable' || parseFloat(c.payout) > 0);
@@ -1253,49 +1289,35 @@ const Performance = {
 // TOP ADS — current Meta ads ranked by recent performance
 // ============================================================
 const TopAds = {
-  LOOKBACK_DAYS: 14,
-  NB_LOOKBACK_DAYS: 30,
-  currentTab: 'meta_live',
   lastData: null,
-
-  switchTab(tab) {
-    this.currentTab = tab;
-    document.querySelectorAll('#metaAdsTabs .sheet-tab').forEach(t => t.classList.remove('active'));
-    const btn = document.querySelector(`#metaAdsTabs .sheet-tab[onclick*="'${tab}'"]`);
-    if (btn) btn.classList.add('active');
-    if (this.lastData) this.render(this.lastData);
-  },
 
   render(data) {
     this.lastData = data;
-    const metaRows = data.metaSpend || [];
-    const nbRows = data.nbSpend || [];
-    const calls = data.calls || [];
+    const showMeta = PlatformFilter.showMeta();
+    const showNB = PlatformFilter.showNB();
+    const metaRows = showMeta ? TimeRange.filterRows(data.metaSpend || [], 'day') : [];
+    const nbRows   = showNB   ? TimeRange.filterRows(data.nbSpend || [], 'day')   : [];
+    const calls = TimeRange.filterRows(data.calls || [], 'timestamp');
     const card = document.getElementById('topAdsCard');
     if (!card) return;
     if (metaRows.length === 0 && nbRows.length === 0) { card.style.display = 'none'; return; }
     card.style.display = '';
 
     const parseDay = s => { try { return new Date(s).getTime(); } catch (e) { return 0; } };
-    const tab = this.currentTab;
-    const showNB = tab === 'nb' || tab === 'all';
-    const showMeta = tab === 'meta_live' || tab === 'meta_alltime' || tab === 'all';
-    const liveOnly = tab === 'meta_live' || tab === 'nb' || tab === 'all';
+    // Time-range/platform already applied above; treat all rows as in-window
+    const tab = PlatformFilter.current === 'all' ? 'all' : (PlatformFilter.current === 'meta' ? 'meta' : 'nb');
+    const liveOnly = TimeRange.current !== 'all';
 
-    // Find latest timestamp across all included sources (for "live" cutoff)
+    // Find latest timestamp across included sources (just for the label)
     let latestTs = 0;
-    if (showMeta) for (const r of metaRows) { const t = parseDay(r.day); if (t > latestTs) latestTs = t; }
-    if (showNB)   for (const r of nbRows)   { const t = parseDay(r.day); if (t > latestTs) latestTs = t; }
-    const metaCutoff = latestTs - this.LOOKBACK_DAYS * 86400000;
-    const nbCutoff   = latestTs - this.NB_LOOKBACK_DAYS * 86400000;
+    for (const r of metaRows) { const t = parseDay(r.day); if (t > latestTs) latestTs = t; }
+    for (const r of nbRows)   { const t = parseDay(r.day); if (t > latestTs) latestTs = t; }
 
-    // Aggregate per ad across the chosen window. Key by (platform::ad_id) when we have a numeric id,
-    // otherwise fall back to (platform::ad_name) so older Meta CSV rows still bucket together.
+    // Aggregate per ad. Rows are already filtered by TimeRange + PlatformFilter.
     const agg = {};
-    const pushRow = (r, platform, windowCutoff) => {
+    const pushRow = (r, platform) => {
       const ts = parseDay(r.day);
       if (!ts) return;
-      if (liveOnly && ts < windowCutoff) return;
       const spend = parseFloat(r.spend) || 0;
       if (liveOnly && spend <= 0) return;
       const name = r.ad_name || 'unknown';
@@ -1303,7 +1325,6 @@ const TopAds = {
       const key = platform + '::' + (adId || 'name:' + name);
       if (!agg[key]) agg[key] = { name, platform, ad_id: adId, spend:0, impressions:0, clicks:0, ctrSum:0, ctrDays:0, days:0, conversions:0, lastDay:'', lastStatus:'', lastTs:0 };
       const a = agg[key];
-      // Backfill ad_id if we see it later for this name
       if (adId && !a.ad_id) a.ad_id = adId;
       a.spend += spend;
       a.impressions += parseFloat(r.impressions) || 0;
@@ -1321,8 +1342,8 @@ const TopAds = {
       }
       a.days += 1;
     };
-    if (showMeta) for (const r of metaRows) pushRow(r, 'Meta', metaCutoff);
-    if (showNB)   for (const r of nbRows)   pushRow(r, 'NewsBreak', nbCutoff);
+    for (const r of metaRows) pushRow(r, 'Meta');
+    for (const r of nbRows)   pushRow(r, 'NewsBreak');
 
     // Attribute calls + revenue. Three matching strategies in priority order:
     //   1. Exact ad_id match (most reliable — works once DNI carries ad_id through)
@@ -1385,12 +1406,7 @@ const TopAds = {
     const totalRev = rows.reduce((s, r) => s + r.revenue, 0);
     const totalConv = rows.reduce((s, r) => s + (r.conversions || 0), 0);
     const totalRoas = totalSpend > 0 ? totalRev / totalSpend : 0;
-    const windowLabel = {
-      'meta_live':    `Meta — last ${this.LOOKBACK_DAYS} days through ${latestStr}`,
-      'meta_alltime': `Meta — all recorded history`,
-      'nb':           `NewsBreak — last ${this.NB_LOOKBACK_DAYS} days through ${latestStr}`,
-      'all':          `Meta (${this.LOOKBACK_DAYS}d) + NewsBreak (${this.NB_LOOKBACK_DAYS}d)`
-    }[tab] || '';
+    const windowLabel = `${PlatformFilter.label()} · ${TimeRange.rangeLabel()}` + (latestStr !== 'n/a' ? ` through ${latestStr}` : '');
     const convPart = totalConv > 0 ? ` · ${totalConv} platform conversions` : '';
     note.innerHTML = `
       ${rows.length} ads · Total spend $${totalSpend.toFixed(2)} · Total revenue $${totalRev.toFixed(2)}${convPart} · ROAS <strong style="color:${totalRoas >= 1 ? 'var(--success)' : 'var(--warning)'}">${totalRoas.toFixed(2)}x</strong> — ${windowLabel}.
